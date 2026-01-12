@@ -5,7 +5,7 @@
 export interface EmailInfo {
   address: string;
   type: 'personal' | 'generic';
-  source: 'crawled' | 'guessed' | 'directory' | 'verified' | 'mailto' | 'deobfuscated' | 'data-attr' | 'cloudflare-decoded' | 'schema-org' | 'javascript' | 'js-concat' | 'google-dork' | 'whois' | 'archive';
+  source: 'crawled' | 'guessed' | 'directory' | 'verified' | 'mailto' | 'deobfuscated' | 'data-attr' | 'cloudflare-decoded' | 'schema-org' | 'javascript' | 'js-concat' | 'google-dork' | 'whois' | 'archive' | 'bing-search';
   personName?: string;
   verified: boolean;
   verificationMethod?: 'mx' | 'smtp' | 'pattern-match' | 'found-on-site';

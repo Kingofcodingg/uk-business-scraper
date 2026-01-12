@@ -29,7 +29,7 @@ import { guessEmails, guessEmailsForTeam, parseName } from './email-guesser';
 import { crawlWebsite, searchLinkedInProfiles, discoverWebsite } from './website-crawler';
 import { searchCompaniesHouse } from './companies-house';
 import { calculateLeadScore, generateLeadSignals } from './lead-scorer';
-import { combinedSearch, searchBingForLinkedIn } from './google-dorking';
+import { combinedSearch, searchBingForLinkedIn, searchDirectContacts } from './google-dorking';
 import { scrapeWaybackMachine, archiveResultsToEmails } from './archive-scraper';
 import { lookupWhois, whoisToEmails, whoisToPersonInfo, getDomainAge } from './whois-scraper';
 import {
@@ -201,6 +201,52 @@ export async function enrichBusiness(
       }
     } catch (err) {
       errors.push(`Website discovery failed: ${err}`);
+    }
+  }
+
+  // Step 0.5: If still no website, search directly for contact info via Bing
+  if (!websiteToUse) {
+    try {
+      console.log(`[Enrich] No website found - searching Bing for direct contacts...`);
+      const directContacts = await searchDirectContacts(
+        business.name,
+        business.postcode || result.addresses[0]?.postcode || ''
+      );
+
+      // Add emails from direct search
+      for (const email of directContacts.emails) {
+        if (!result.emails.some(e => e.address === email.address)) {
+          result.emails.push(email);
+        }
+      }
+
+      // Add phones from direct search
+      for (const phone of directContacts.phones) {
+        const digits = phone.number.replace(/\D/g, '');
+        if (!result.phones.some(p => p.number.replace(/\D/g, '') === digits)) {
+          result.phones.push({
+            number: phone.number,
+            type: phone.type,
+            source: phone.source,
+            verified: false,
+          });
+        }
+      }
+
+      // If we found a website, use it
+      if (directContacts.website) {
+        websiteToUse = directContacts.website;
+        result.website = directContacts.website;
+        sources.push('direct-contact-search');
+        console.log(`[Enrich] Found website via direct search: ${directContacts.website}`);
+      }
+
+      if (directContacts.emails.length > 0 || directContacts.phones.length > 0) {
+        sources.push('bing-direct-search');
+        console.log(`[Enrich] Found ${directContacts.emails.length} emails, ${directContacts.phones.length} phones via Bing`);
+      }
+    } catch (err) {
+      errors.push(`Direct contact search failed: ${err}`);
     }
   }
 

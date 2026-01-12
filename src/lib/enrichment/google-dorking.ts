@@ -504,3 +504,202 @@ export async function combinedSearch(
     linkedinUrls: [...new Set(allLinkedIn)],
   };
 }
+
+// UK phone number patterns
+const UK_PHONE_PATTERNS = [
+  // Mobile: 07xxx xxx xxx
+  /\b(07\d{3}[\s.-]?\d{3}[\s.-]?\d{3})\b/g,
+  // UK landlines with area codes
+  /\b(0[1-9]\d{2,4}[\s.-]?\d{3}[\s.-]?\d{3,4})\b/g,
+  // Freephone
+  /\b(0800[\s.-]?\d{3}[\s.-]?\d{4})\b/g,
+  /\b(0808[\s.-]?\d{3}[\s.-]?\d{4})\b/g,
+  // +44 format
+  /\b(\+44[\s.-]?\(?0?\)?[\s.-]?[1-9]\d{2,4}[\s.-]?\d{3}[\s.-]?\d{3,4})\b/g,
+];
+
+/**
+ * Extract UK phone numbers from text
+ */
+function extractPhonesFromText(text: string): string[] {
+  const phones: string[] = [];
+  const seen = new Set<string>();
+
+  for (const pattern of UK_PHONE_PATTERNS) {
+    const matches = text.match(pattern);
+    if (matches) {
+      for (const match of matches) {
+        // Normalize phone number
+        const normalized = match.replace(/[\s.-]/g, '');
+
+        // Validate length (UK numbers are 10-11 digits after 0 or +44)
+        const digitsOnly = normalized.replace(/\D/g, '');
+        if (digitsOnly.length >= 10 && digitsOnly.length <= 13) {
+          if (!seen.has(normalized)) {
+            seen.add(normalized);
+            phones.push(match.trim());
+          }
+        }
+      }
+    }
+  }
+
+  return phones;
+}
+
+export interface DirectContactResult {
+  emails: EmailInfo[];
+  phones: Array<{
+    number: string;
+    type: 'mobile' | 'landline' | 'freephone';
+    source: string;
+  }>;
+  website?: string;
+}
+
+/**
+ * Search Bing directly for business contact details (when no website found)
+ * This is useful for businesses without websites but listed in directories
+ */
+export async function searchDirectContacts(
+  companyName: string,
+  location?: string
+): Promise<DirectContactResult> {
+  const result: DirectContactResult = {
+    emails: [],
+    phones: [],
+  };
+
+  const seenEmails = new Set<string>();
+  const seenPhones = new Set<string>();
+
+  console.log(`[DirectSearch] Searching for contacts: ${companyName}`);
+
+  // Search queries targeting contact info
+  const queries = [
+    `"${companyName}" ${location || 'UK'} phone email contact`,
+    `"${companyName}" ${location || 'UK'} telephone`,
+    `"${companyName}" contact number email`,
+  ];
+
+  for (const query of queries.slice(0, 2)) {
+    try {
+      const searchResult = await searchBing(query);
+
+      // Extract emails
+      for (const email of searchResult.emails) {
+        if (!seenEmails.has(email)) {
+          seenEmails.add(email);
+
+          const localPart = email.split('@')[0].toLowerCase();
+          const genericPrefixes = [
+            'info', 'contact', 'hello', 'enquiries', 'sales', 'support',
+            'admin', 'office', 'mail', 'help', 'general', 'reception',
+          ];
+
+          const type = genericPrefixes.some(p =>
+            localPart === p || localPart.startsWith(p + '.')
+          ) ? 'generic' : 'personal';
+
+          result.emails.push({
+            address: email,
+            type,
+            source: 'bing-search',
+            verified: false,
+            confidence: 'medium',
+          });
+        }
+      }
+
+      // Extract phones from snippets
+      for (const snippet of searchResult.snippets) {
+        const phones = extractPhonesFromText(snippet);
+        for (const phone of phones) {
+          const normalized = phone.replace(/[\s.-]/g, '');
+          if (!seenPhones.has(normalized)) {
+            seenPhones.add(normalized);
+
+            let phoneType: 'mobile' | 'landline' | 'freephone' = 'landline';
+            if (normalized.startsWith('07') || normalized.startsWith('+447')) {
+              phoneType = 'mobile';
+            } else if (normalized.startsWith('0800') || normalized.startsWith('0808')) {
+              phoneType = 'freephone';
+            }
+
+            result.phones.push({
+              number: phone,
+              type: phoneType,
+              source: 'bing-search',
+            });
+          }
+        }
+      }
+
+      // Also search the raw HTML for phones
+      const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=15`;
+      const response = await fetch(url, {
+        headers: HEADERS,
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (response.ok) {
+        const html = await response.text();
+        const htmlPhones = extractPhonesFromText(html);
+
+        for (const phone of htmlPhones) {
+          const normalized = phone.replace(/[\s.-]/g, '');
+          if (!seenPhones.has(normalized)) {
+            seenPhones.add(normalized);
+
+            let phoneType: 'mobile' | 'landline' | 'freephone' = 'landline';
+            if (normalized.startsWith('07') || normalized.startsWith('+447')) {
+              phoneType = 'mobile';
+            } else if (normalized.startsWith('0800') || normalized.startsWith('0808')) {
+              phoneType = 'freephone';
+            }
+
+            result.phones.push({
+              number: phone,
+              type: phoneType,
+              source: 'bing-search',
+            });
+          }
+        }
+
+        // Try to find a website URL in results
+        if (!result.website) {
+          const urlPattern = /href="(https?:\/\/(?!www\.bing|www\.microsoft|www\.google|linkedin\.com|facebook\.com|twitter\.com|yell\.com|checkatrade\.com)[^"]+)"/gi;
+          const urlMatches = html.matchAll(urlPattern);
+
+          const companyWords = companyName.toLowerCase()
+            .replace(/[^a-z0-9\s]/g, '')
+            .split(/\s+/)
+            .filter(w => w.length > 2 && !['the', 'and', 'ltd', 'limited'].includes(w));
+
+          for (const match of Array.from(urlMatches).slice(0, 20)) {
+            const candidateUrl = match[1].split('?')[0];
+            const urlLower = candidateUrl.toLowerCase();
+
+            // Check if URL contains company name words
+            const matchingWords = companyWords.filter(word => urlLower.includes(word));
+            if (matchingWords.length >= Math.min(2, companyWords.length)) {
+              if (candidateUrl.match(/\.(co\.uk|uk|com|org|net)\/?$/i)) {
+                result.website = candidateUrl;
+                console.log(`[DirectSearch] Found website: ${candidateUrl}`);
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+    } catch (error) {
+      console.log(`[DirectSearch] Error:`, error);
+    }
+  }
+
+  console.log(`[DirectSearch] Found ${result.emails.length} emails, ${result.phones.length} phones`);
+  return result;
+}
