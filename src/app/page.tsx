@@ -190,10 +190,14 @@ const RADIUS_OPTIONS = [
 
 const DATA_SOURCES = [
   { id: "yell", name: "Yell.com", description: "UK Yellow Pages" },
-  { id: "freeindex", name: "FreeIndex", description: "UK Business Directory" },
-  { id: "thomson", name: "Thomson Local", description: "Local Business Directory" },
+  { id: "checkatrade", name: "Checkatrade", description: "Verified Trades" },
+  { id: "freeindex", name: "FreeIndex", description: "UK Directory" },
+  { id: "trustpilot", name: "Trustpilot", description: "Reviews Platform" },
+  { id: "bark", name: "Bark", description: "Service Marketplace" },
   { id: "yelp", name: "Yelp UK", description: "Reviews & Ratings" },
-  { id: "google", name: "Google Maps", description: "Google Local Results" },
+  { id: "google", name: "Google", description: "Local Search" },
+  { id: "cylex", name: "Cylex UK", description: "Business Directory" },
+  { id: "hotfrog", name: "Hotfrog", description: "UK Listings" },
 ];
 
 export default function Home() {
@@ -201,8 +205,8 @@ export default function Home() {
     query: "",
     postcode: "",
     radius: "10",
-    sources: ["yell", "freeindex"],
-    maxPages: 2,
+    sources: ["yell", "checkatrade", "freeindex", "trustpilot"],
+    maxPages: 5,
   });
   const [customQuery, setCustomQuery] = useState("");
   const [results, setResults] = useState<Business[]>([]);
@@ -416,7 +420,7 @@ export default function Home() {
           <label className="block text-sm font-medium text-gray-700 mb-3">
             Data Sources
           </label>
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-2">
             {DATA_SOURCES.map((source) => (
               <label
                 key={source.id}
