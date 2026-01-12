@@ -859,52 +859,66 @@ export default function Home() {
     setBulkEnriching(true);
 
     const selectedIndices = Array.from(selectedBusinesses);
-    const businessesToEnrich = selectedIndices.map(i => results[i]).filter(b => !b.enriched);
+    const businessesToEnrich = selectedIndices
+      .map(i => ({ index: i, business: results[i] }))
+      .filter(item => !item.business.enriched);
 
-    try {
-      const response = await fetch("/api/enrich", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businesses: businessesToEnrich.map(b => ({
-            name: b.name,
-            website: b.website,
-            postcode: b.postcode,
-            rating: b.rating,
-            review_count: b.review_count,
-            phone: b.phone,
-            email: b.email,
-            address: b.address,
-            industry: b.industry,
-            distance: b.distance,
-          })),
-        }),
-      });
+    // Mark all selected as enriching
+    setResults(prev => prev.map((b, i) =>
+      selectedIndices.includes(i) && !b.enriched ? { ...b, enriching: true } : b
+    ));
 
-      if (!response.ok) throw new Error("Bulk enrichment failed");
+    // Helper function to enrich a single business and update UI immediately
+    const enrichOne = async (item: { index: number; business: Business }) => {
+      try {
+        const response = await fetch("/api/enrich", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            businessName: item.business.name,
+            website: item.business.website,
+            postcode: item.business.postcode,
+            rating: item.business.rating,
+            review_count: item.business.review_count,
+            phone: item.business.phone,
+            email: item.business.email,
+            address: item.business.address,
+            industry: item.business.industry,
+            distance: item.business.distance,
+          }),
+        });
 
-      const data = await response.json();
+        if (!response.ok) throw new Error("Enrichment failed");
 
-      setResults(prev => {
-        const updated = [...prev];
-        for (const result of data.results) {
-          const idx = updated.findIndex(b => b.name === result.originalName);
-          if (idx !== -1 && result.enrichedData) {
-            updated[idx] = {
-              ...updated[idx],
-              ...result.enrichedData,
-              lead_score: result.newLeadScore || updated[idx].lead_score,
-              enriched: true,
-            };
-          }
-        }
-        return updated;
-      });
-    } catch {
-      setError("Bulk enrichment failed");
-    } finally {
-      setBulkEnriching(false);
+        const data = await response.json();
+
+        // Update this business immediately in the UI
+        setResults(prev => prev.map((b, i) =>
+          i === item.index ? {
+            ...b,
+            ...data.enrichedData,
+            lead_score: data.newLeadScore || b.lead_score,
+            lead_signals: data.leadSignals || b.lead_signals,
+            enriched: true,
+            enriching: false,
+          } : b
+        ));
+      } catch {
+        // Mark as failed but not enriching
+        setResults(prev => prev.map((b, i) =>
+          i === item.index ? { ...b, enriching: false } : b
+        ));
+      }
+    };
+
+    // Process 6 at a time for speed, with immediate UI updates
+    const CONCURRENT = 6;
+    for (let i = 0; i < businessesToEnrich.length; i += CONCURRENT) {
+      const batch = businessesToEnrich.slice(i, i + CONCURRENT);
+      await Promise.all(batch.map(enrichOne));
     }
+
+    setBulkEnriching(false);
   }, [selectedBusinesses, results]);
 
   const toggleSelect = useCallback((index: number) => {
@@ -1177,7 +1191,9 @@ export default function Home() {
                     className="px-3 py-1.5 bg-violet-600 text-white text-sm rounded-lg hover:bg-violet-700 disabled:bg-gray-400 flex items-center gap-1"
                   >
                     {bulkEnriching && <Spinner />}
-                    {bulkEnriching ? "Enriching..." : `Enrich (${selectedBusinesses.size})`}
+                    {bulkEnriching
+                      ? `Enriching ${Array.from(selectedBusinesses).filter(i => results[i]?.enriched).length}/${selectedBusinesses.size}...`
+                      : `Enrich (${selectedBusinesses.size})`}
                   </button>
                   <button
                     onClick={exportCSV}

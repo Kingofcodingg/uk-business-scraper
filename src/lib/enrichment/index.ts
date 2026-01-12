@@ -250,6 +250,19 @@ export async function enrichBusiness(
       }
     }
     console.log(`[Enrich] Found Companies House data with ${chData.directors.length} directors`);
+
+    // If we still don't have a website, try searching with the official company name
+    if (!websiteToUse && chData.companyName) {
+      console.log(`[Enrich] Trying website discovery with Companies House name: ${chData.companyName}`);
+      const chPostcode = extractPostcode(chData.registeredAddress);
+      const chWebsite = await discoverWebsite(chData.companyName, chPostcode || postcode);
+      if (chWebsite) {
+        websiteToUse = chWebsite;
+        result.website = chWebsite;
+        sources.push('website-discovery-ch');
+        console.log(`[Enrich] Found website via CH name: ${chWebsite}`);
+      }
+    }
   } else if (chResult.status === 'rejected') {
     errors.push(`Companies House search failed: ${chResult.reason}`);
   }
@@ -477,9 +490,9 @@ export async function enrichBusinesses(
     );
     results.push(...batchResults);
 
-    // Delay between batches
+    // Minimal delay between batches (just to prevent rate limiting)
     if (i + maxConcurrent < businesses.length) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
 

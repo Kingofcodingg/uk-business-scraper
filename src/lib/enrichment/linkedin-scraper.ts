@@ -197,7 +197,66 @@ async function searchGoogleForLinkedIn(query: string): Promise<LinkedInProfile[]
 }
 
 /**
- * Search Bing for LinkedIn profiles (less restrictive, more reliable)
+ * Search Brave for LinkedIn profiles (most reliable, no captcha)
+ */
+async function searchBraveForLinkedIn(query: string): Promise<LinkedInProfile[]> {
+  const profiles: LinkedInProfile[] = [];
+
+  try {
+    const url = `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`;
+    const response = await fetch(url, {
+      headers: {
+        ...HEADERS,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-GB,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      console.log(`[LinkedIn] Brave returned ${response.status}`);
+      return profiles;
+    }
+
+    const html = await response.text();
+
+    // Extract LinkedIn URLs
+    const urlPattern = /(https?:\/\/(?:www\.)?(?:uk\.)?linkedin\.com\/(?:in|company)\/[\w-]+)/gi;
+    const matches = html.match(urlPattern);
+
+    if (matches) {
+      const seenUrls = new Set<string>();
+      for (const linkedinUrl of matches) {
+        const cleanUrl = linkedinUrl.split('?')[0];
+        if (!seenUrls.has(cleanUrl)) {
+          seenUrls.add(cleanUrl);
+
+          // Try to extract context around the URL
+          const urlIndex = html.indexOf(linkedinUrl);
+          const contextStart = Math.max(0, urlIndex - 400);
+          const contextEnd = Math.min(html.length, urlIndex + 400);
+          const context = html.substring(contextStart, contextEnd)
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+          profiles.push(parseProfileFromSnippet(cleanUrl, context));
+        }
+      }
+    }
+
+    console.log(`[LinkedIn] Brave found ${profiles.length} profiles`);
+  } catch (error) {
+    console.log(`[LinkedIn] Brave search error:`, error);
+  }
+
+  return profiles;
+}
+
+/**
+ * Search Bing for LinkedIn profiles (fallback)
  */
 async function searchBingForLinkedIn(query: string): Promise<LinkedInProfile[]> {
   const profiles: LinkedInProfile[] = [];
@@ -380,21 +439,21 @@ export async function searchLinkedIn(
     if (result.profiles.length >= maxProfiles) break;
 
     try {
-      // Try Bing first (most reliable for automated searches)
-      let profiles = await searchBingForLinkedIn(query);
+      // Try Brave first (most reliable, no captcha)
+      let profiles = await searchBraveForLinkedIn(query);
       processProfiles(profiles);
+
+      // If still need more, try Bing
+      if (result.profiles.length < maxProfiles && profiles.length === 0) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        profiles = await searchBingForLinkedIn(query);
+        processProfiles(profiles);
+      }
 
       // If still need more, try DuckDuckGo
       if (result.profiles.length < maxProfiles && profiles.length === 0) {
         await new Promise(resolve => setTimeout(resolve, 200));
         profiles = await searchDuckDuckGoForLinkedIn(query);
-        processProfiles(profiles);
-      }
-
-      // As last resort, try Google (often blocked but worth trying)
-      if (result.profiles.length < maxProfiles / 2 && i === 0) {
-        await new Promise(resolve => setTimeout(resolve, 200));
-        profiles = await searchGoogleForLinkedIn(query);
         processProfiles(profiles);
       }
 

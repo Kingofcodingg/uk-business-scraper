@@ -148,7 +148,7 @@ export async function PUT(request: NextRequest) {
       searchCompaniesHouse: true,
       guessEmails: true,
       searchLinkedIn: true,
-    }, 3); // Process 3 at a time
+    }, 6); // Process 6 at a time for faster bulk enrichment
 
     const results = enrichedLeads.map(lead => ({
       originalName: lead.businessName,

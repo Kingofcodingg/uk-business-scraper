@@ -768,9 +768,9 @@ const SKIP_DOMAINS = [
 ];
 
 /**
- * Search Bing for company website (more reliable than Google)
+ * Search Brave for company website (most reliable, no captcha)
  */
-async function searchBingForWebsite(
+async function searchBraveForWebsite(
   businessName: string,
   location: string
 ): Promise<string[]> {
@@ -778,48 +778,192 @@ async function searchBingForWebsite(
 
   try {
     const query = location
-      ? `"${businessName}" ${location} website official`
-      : `"${businessName}" UK website official`;
+      ? `${businessName} ${location} UK official website`
+      : `${businessName} UK official website`;
 
-    const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=15`;
+    const url = `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`;
     const response = await fetch(url, {
-      headers: HEADERS,
+      headers: {
+        ...HEADERS,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-GB,en;q=0.9",
+      },
       signal: AbortSignal.timeout(10000),
     });
 
     if (!response.ok) {
-      console.log(`[WebDiscovery] Bing search failed: ${response.status}`);
+      console.log(`[WebDiscovery] Brave search failed: ${response.status}`);
       return [];
     }
 
     const html = await response.text();
 
-    // Extract URLs from Bing results
+    // Extract URLs from Brave results - they use direct URLs
+    const urlPattern = /https?:\/\/(?!search\.brave|brave\.com|cdn\.search|static\.search)[a-z0-9][a-z0-9.-]+\.(co\.uk|com|uk|org|net)[^\s"'<>]*/gi;
+    const matches = html.match(urlPattern) || [];
+
+    for (const match of matches) {
+      let candidateUrl = match.split('?')[0].replace(/\/$/, '');
+
+      // Skip unwanted domains
+      if (SKIP_DOMAINS.some(d => candidateUrl.toLowerCase().includes(d))) continue;
+
+      // Normalize URL
+      if (!candidateUrls.includes(candidateUrl) && candidateUrls.length < 10) {
+        candidateUrls.push(candidateUrl);
+      }
+    }
+
+    console.log(`[WebDiscovery] Brave found ${candidateUrls.length} candidates`);
+  } catch (error) {
+    console.log(`[WebDiscovery] Brave search error:`, error);
+  }
+
+  return candidateUrls;
+}
+
+/**
+ * Search Bing for company website (fallback, may have captcha)
+ */
+async function searchBingForWebsite(
+  businessName: string,
+  location: string
+): Promise<string[]> {
+  const candidateUrls: string[] = [];
+
+  // Try multiple query formats for better results
+  const queries = location
+    ? [
+        `"${businessName}" ${location} official website`,
+        `${businessName} ${location} website`,
+        `${businessName} ${location}`,
+      ]
+    : [
+        `"${businessName}" UK official website`,
+        `${businessName} UK website`,
+        `${businessName} accountants UK`, // Common industry term
+      ];
+
+  for (const query of queries) {
+    if (candidateUrls.length >= 5) break;
+
+    try {
+      const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20`;
+      const response = await fetch(url, {
+        headers: HEADERS,
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!response.ok) {
+        console.log(`[WebDiscovery] Bing search failed: ${response.status}`);
+        continue;
+      }
+
+      const html = await response.text();
+
+      // Extract URLs from Bing results
+      const urlPatterns = [
+        // Direct href links in results
+        /href="(https?:\/\/(?!www\.bing|www\.microsoft)[^"]+)"/gi,
+        // Cite tags with URLs
+        /<cite[^>]*>(https?:\/\/[^<]+)<\/cite>/gi,
+        /<cite[^>]*>([a-z0-9][\w.-]+\.[a-z]{2,}[^<]*)<\/cite>/gi,
+      ];
+
+      for (const pattern of urlPatterns) {
+        const matches = html.matchAll(pattern);
+        for (const match of Array.from(matches)) {
+          let candidateUrl = match[1].split('&')[0].split('?')[0];
+
+          // Clean up URL
+          candidateUrl = candidateUrl.replace(/\/$/, '');
+
+          // Skip unwanted domains
+          if (SKIP_DOMAINS.some(d => candidateUrl.toLowerCase().includes(d))) continue;
+
+          // Normalize URL
+          if (!candidateUrl.startsWith('http')) {
+            candidateUrl = `https://${candidateUrl}`;
+          }
+
+          // Only accept UK-relevant domains or .com
+          if (candidateUrl.match(/\.(co\.uk|uk|com|org|net)\/?$/i)) {
+            if (!candidateUrls.includes(candidateUrl)) {
+              candidateUrls.push(candidateUrl);
+            }
+          }
+        }
+      }
+
+      // Small delay between queries
+      if (queries.indexOf(query) < queries.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+    } catch (error) {
+      console.log(`[WebDiscovery] Bing search error:`, error);
+    }
+  }
+
+  console.log(`[WebDiscovery] Bing found ${candidateUrls.length} candidates`);
+  return candidateUrls;
+}
+
+/**
+ * Search Google for company website (may have captcha issues but good results)
+ */
+async function searchGoogleForWebsite(
+  businessName: string,
+  location: string
+): Promise<string[]> {
+  const candidateUrls: string[] = [];
+
+  try {
+    const query = location
+      ? `"${businessName}" ${location} contact website`
+      : `"${businessName}" UK official website`;
+
+    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}&num=10&hl=en`;
+    const response = await fetch(url, {
+      headers: {
+        ...HEADERS,
+        "Accept-Language": "en-GB,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      console.log(`[WebDiscovery] Google search failed: ${response.status}`);
+      return [];
+    }
+
+    const html = await response.text();
+
+    // Check for captcha
+    if (html.includes('unusual traffic') || html.includes('captcha')) {
+      console.log(`[WebDiscovery] Google captcha detected`);
+      return [];
+    }
+
+    // Extract URLs from Google results
     const urlPatterns = [
-      // Direct href links in results
-      /href="(https?:\/\/(?!www\.bing|www\.microsoft)[^"]+)"/gi,
-      // Cite tags with URLs
-      /<cite[^>]*>(https?:\/\/[^<]+)<\/cite>/gi,
-      /<cite[^>]*>([a-z0-9][\w.-]+\.[a-z]{2,}[^<]*)<\/cite>/gi,
+      /href="\/url\?q=(https?:\/\/[^&"]+)/gi,
+      /href="(https?:\/\/(?!www\.google)[^"]+)"/gi,
+      /<cite[^>]*>(https?:\/\/[^<\s]+)/gi,
+      /<cite[^>]*>([a-z0-9][\w.-]+\.[a-z]{2,})/gi,
     ];
 
     for (const pattern of urlPatterns) {
       const matches = html.matchAll(pattern);
       for (const match of Array.from(matches)) {
-        let candidateUrl = match[1].split('&')[0].split('?')[0];
-
-        // Clean up URL
+        let candidateUrl = decodeURIComponent(match[1]).split('&')[0].split('?')[0];
         candidateUrl = candidateUrl.replace(/\/$/, '');
 
-        // Skip unwanted domains
         if (SKIP_DOMAINS.some(d => candidateUrl.toLowerCase().includes(d))) continue;
-
-        // Normalize URL
         if (!candidateUrl.startsWith('http')) {
           candidateUrl = `https://${candidateUrl}`;
         }
 
-        // Only accept UK-relevant domains or .com
         if (candidateUrl.match(/\.(co\.uk|uk|com|org|net)\/?$/i)) {
           if (!candidateUrls.includes(candidateUrl)) {
             candidateUrls.push(candidateUrl);
@@ -828,8 +972,9 @@ async function searchBingForWebsite(
       }
     }
 
+    console.log(`[WebDiscovery] Google found ${candidateUrls.length} candidates`);
   } catch (error) {
-    console.log(`[WebDiscovery] Bing search error:`, error);
+    console.log(`[WebDiscovery] Google search error:`, error);
   }
 
   return candidateUrls;
@@ -862,6 +1007,7 @@ async function searchDuckDuckGoForWebsite(
     }
 
     const html = await response.text();
+    console.log(`[WebDiscovery] DuckDuckGo returned ${html.length} bytes`);
 
     // Extract URLs from DuckDuckGo results
     const urlPattern = /href="(https?:\/\/[^"]+)"/gi;
@@ -891,6 +1037,7 @@ async function searchDuckDuckGoForWebsite(
       }
     }
 
+    console.log(`[WebDiscovery] DuckDuckGo found ${candidateUrls.length} candidates`);
   } catch (error) {
     console.log(`[WebDiscovery] DuckDuckGo search error:`, error);
   }
@@ -958,16 +1105,29 @@ export async function discoverWebsite(
   for (const variation of searchVariations) {
     if (allCandidates.length >= 5) break;
 
-    // Try Bing first (most reliable for automated searches)
-    const bingResults = await searchBingForWebsite(variation.name, variation.loc);
-    for (const url of bingResults) {
+    console.log(`[WebDiscovery] Trying variation: "${variation.name}" in "${variation.loc}"`);
+
+    // Try Brave first (most reliable, no captcha)
+    const braveResults = await searchBraveForWebsite(variation.name, variation.loc);
+    for (const url of braveResults) {
       if (!allCandidates.includes(url)) {
         allCandidates.push(url);
       }
     }
 
     if (allCandidates.length === 0) {
-      // Try DuckDuckGo if Bing returns nothing
+      // Try Bing as second option
+      await new Promise(resolve => setTimeout(resolve, 200));
+      const bingResults = await searchBingForWebsite(variation.name, variation.loc);
+      for (const url of bingResults) {
+        if (!allCandidates.includes(url)) {
+          allCandidates.push(url);
+        }
+      }
+    }
+
+    if (allCandidates.length === 0) {
+      // Try DuckDuckGo if others return nothing
       await new Promise(resolve => setTimeout(resolve, 200));
       const ddgResults = await searchDuckDuckGoForWebsite(variation.name, variation.loc);
       for (const url of ddgResults) {
