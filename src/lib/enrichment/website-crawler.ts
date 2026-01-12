@@ -756,56 +756,63 @@ export async function crawlWebsite(websiteUrl: string): Promise<CrawlResult> {
 /**
  * Search Google to discover a business website
  */
-export async function discoverWebsite(
+// Skip domains for website discovery
+const SKIP_DOMAINS = [
+  'google.com', 'facebook.com', 'linkedin.com', 'twitter.com', 'instagram.com',
+  'youtube.com', 'yelp.com', 'yell.com', 'tripadvisor.com', 'trustpilot.com',
+  'checkatrade.com', 'mybuilder.com', 'bark.com', 'freeindex.co.uk',
+  'cylex-uk.co.uk', 'scoot.co.uk', 'hotfrog.co.uk', 'brownbook.net',
+  'wikipedia.org', 'gov.uk', 'companieshouse.gov.uk', 'amazon.', 'ebay.',
+  'bing.com', 'duckduckgo.com', 'yahoo.com', 'msn.com', 'x.com',
+  'thomsonlocal.com', '118118.com', 'novaloca.com', 'gumtree.com',
+];
+
+/**
+ * Search Bing for company website (more reliable than Google)
+ */
+async function searchBingForWebsite(
   businessName: string,
   location: string
-): Promise<string | null> {
-  console.log(`[WebDiscovery] Searching for website: ${businessName} in ${location}`);
-
-  // Build search query
-  const query = location
-    ? `"${businessName}" ${location} site:uk OR site:co.uk`
-    : `"${businessName}" UK website`;
+): Promise<string[]> {
+  const candidateUrls: string[] = [];
 
   try {
-    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}&num=10`;
+    const query = location
+      ? `"${businessName}" ${location} website official`
+      : `"${businessName}" UK website official`;
+
+    const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=15`;
     const response = await fetch(url, {
       headers: HEADERS,
       signal: AbortSignal.timeout(10000),
     });
 
     if (!response.ok) {
-      console.log(`[WebDiscovery] Google search failed: ${response.status}`);
-      return null;
+      console.log(`[WebDiscovery] Bing search failed: ${response.status}`);
+      return [];
     }
 
     const html = await response.text();
 
-    // Extract URLs from Google results
+    // Extract URLs from Bing results
     const urlPatterns = [
-      // Direct href links
-      /href="\/url\?q=(https?:\/\/(?!www\.google|maps\.google|support\.google|accounts\.google)[^&"]+)/gi,
-      // Visible URLs in results
-      /<cite[^>]*>([a-z0-9][\w.-]*\.[a-z]{2,})/gi,
+      // Direct href links in results
+      /href="(https?:\/\/(?!www\.bing|www\.microsoft)[^"]+)"/gi,
+      // Cite tags with URLs
+      /<cite[^>]*>(https?:\/\/[^<]+)<\/cite>/gi,
+      /<cite[^>]*>([a-z0-9][\w.-]+\.[a-z]{2,}[^<]*)<\/cite>/gi,
     ];
-
-    const candidateUrls: string[] = [];
 
     for (const pattern of urlPatterns) {
       const matches = html.matchAll(pattern);
       for (const match of Array.from(matches)) {
-        let candidateUrl = decodeURIComponent(match[1]).split('&')[0];
+        let candidateUrl = match[1].split('&')[0].split('?')[0];
+
+        // Clean up URL
+        candidateUrl = candidateUrl.replace(/\/$/, '');
 
         // Skip unwanted domains
-        const skipDomains = [
-          'google.com', 'facebook.com', 'linkedin.com', 'twitter.com', 'instagram.com',
-          'youtube.com', 'yelp.com', 'yell.com', 'tripadvisor.com', 'trustpilot.com',
-          'checkatrade.com', 'mybuilder.com', 'bark.com', 'freeindex.co.uk',
-          'cylex-uk.co.uk', 'scoot.co.uk', 'hotfrog.co.uk', 'brownbook.net',
-          'wikipedia.org', 'gov.uk', 'companieshouse.gov.uk', 'amazon.', 'ebay.',
-        ];
-
-        if (skipDomains.some(d => candidateUrl.includes(d))) continue;
+        if (SKIP_DOMAINS.some(d => candidateUrl.toLowerCase().includes(d))) continue;
 
         // Normalize URL
         if (!candidateUrl.startsWith('http')) {
@@ -813,42 +820,165 @@ export async function discoverWebsite(
         }
 
         // Only accept UK-relevant domains or .com
-        if (candidateUrl.match(/\.(co\.uk|uk|com|org|net)\/?/i)) {
+        if (candidateUrl.match(/\.(co\.uk|uk|com|org|net)\/?$/i)) {
+          if (!candidateUrls.includes(candidateUrl)) {
+            candidateUrls.push(candidateUrl);
+          }
+        }
+      }
+    }
+
+  } catch (error) {
+    console.log(`[WebDiscovery] Bing search error:`, error);
+  }
+
+  return candidateUrls;
+}
+
+/**
+ * Search DuckDuckGo for company website (privacy-focused, no captcha)
+ */
+async function searchDuckDuckGoForWebsite(
+  businessName: string,
+  location: string
+): Promise<string[]> {
+  const candidateUrls: string[] = [];
+
+  try {
+    const query = location
+      ? `${businessName} ${location} official website`
+      : `${businessName} UK official website`;
+
+    // DuckDuckGo HTML search
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const response = await fetch(url, {
+      headers: HEADERS,
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      console.log(`[WebDiscovery] DuckDuckGo search failed: ${response.status}`);
+      return [];
+    }
+
+    const html = await response.text();
+
+    // Extract URLs from DuckDuckGo results
+    const urlPattern = /href="(https?:\/\/[^"]+)"/gi;
+    const matches = html.matchAll(urlPattern);
+
+    for (const match of Array.from(matches)) {
+      let candidateUrl = match[1];
+
+      // DuckDuckGo uses redirect URLs, extract actual URL
+      const uddgMatch = candidateUrl.match(/uddg=([^&]+)/);
+      if (uddgMatch) {
+        candidateUrl = decodeURIComponent(uddgMatch[1]);
+      }
+
+      // Clean up URL
+      candidateUrl = candidateUrl.split('?')[0].replace(/\/$/, '');
+
+      // Skip unwanted domains
+      if (SKIP_DOMAINS.some(d => candidateUrl.toLowerCase().includes(d))) continue;
+      if (candidateUrl.includes('duckduckgo.com')) continue;
+
+      // Only accept UK-relevant domains or .com
+      if (candidateUrl.match(/\.(co\.uk|uk|com|org|net)\/?$/i)) {
+        if (!candidateUrls.includes(candidateUrl)) {
           candidateUrls.push(candidateUrl);
         }
       }
     }
 
-    // Check if any URL contains the business name (fuzzy match)
-    const businessWords = businessName.toLowerCase()
-      .replace(/[^a-z0-9\s]/g, '')
-      .split(/\s+/)
-      .filter(w => w.length > 2 && !['the', 'and', 'ltd', 'limited', 'plc', 'uk'].includes(w));
+  } catch (error) {
+    console.log(`[WebDiscovery] DuckDuckGo search error:`, error);
+  }
 
-    for (const candidateUrl of candidateUrls) {
-      const urlLower = candidateUrl.toLowerCase();
+  return candidateUrls;
+}
 
-      // Check if URL contains business name words
-      const matchingWords = businessWords.filter(word => urlLower.includes(word));
-      if (matchingWords.length >= Math.min(2, businessWords.length)) {
-        console.log(`[WebDiscovery] Found likely website: ${candidateUrl}`);
-        return candidateUrl;
+/**
+ * Score candidate URLs based on business name match
+ */
+function scoreUrlMatch(url: string, businessName: string): number {
+  const urlLower = url.toLowerCase();
+  const businessWords = businessName.toLowerCase()
+    .replace(/[^a-z0-9\s]/g, '')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !['the', 'and', 'ltd', 'limited', 'plc', 'uk', 'international'].includes(w));
+
+  if (businessWords.length === 0) return 0;
+
+  // Check how many business words appear in the URL
+  const matchingWords = businessWords.filter(word => urlLower.includes(word));
+  let score = matchingWords.length / businessWords.length;
+
+  // Bonus for .co.uk domains
+  if (url.includes('.co.uk')) score += 0.2;
+
+  // Bonus for exact domain match
+  const domainMatch = url.match(/https?:\/\/(?:www\.)?([^/]+)/);
+  if (domainMatch) {
+    const domain = domainMatch[1].split('.')[0];
+    const businessSlug = businessName.toLowerCase()
+      .replace(/[^a-z0-9]/g, '')
+      .substring(0, 20);
+    if (domain.includes(businessSlug.substring(0, 8))) {
+      score += 0.3;
+    }
+  }
+
+  return score;
+}
+
+export async function discoverWebsite(
+  businessName: string,
+  location: string
+): Promise<string | null> {
+  console.log(`[WebDiscovery] Searching for website: ${businessName} in ${location}`);
+
+  const allCandidates: string[] = [];
+
+  // Try Bing first (most reliable for automated searches)
+  const bingResults = await searchBingForWebsite(businessName, location);
+  allCandidates.push(...bingResults);
+  console.log(`[WebDiscovery] Bing found ${bingResults.length} candidates`);
+
+  // Try DuckDuckGo as backup
+  if (allCandidates.length < 3) {
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const ddgResults = await searchDuckDuckGoForWebsite(businessName, location);
+    for (const url of ddgResults) {
+      if (!allCandidates.includes(url)) {
+        allCandidates.push(url);
       }
     }
+    console.log(`[WebDiscovery] DuckDuckGo added ${ddgResults.length} candidates`);
+  }
 
-    // Return first candidate if no name match
-    if (candidateUrls.length > 0) {
-      console.log(`[WebDiscovery] Using first candidate: ${candidateUrls[0]}`);
-      return candidateUrls[0];
-    }
-
+  if (allCandidates.length === 0) {
     console.log(`[WebDiscovery] No website found for: ${businessName}`);
     return null;
-
-  } catch (error) {
-    console.log(`[WebDiscovery] Search error:`, error);
-    return null;
   }
+
+  // Score and sort candidates
+  const scoredCandidates = allCandidates.map(url => ({
+    url,
+    score: scoreUrlMatch(url, businessName),
+  })).sort((a, b) => b.score - a.score);
+
+  console.log(`[WebDiscovery] Top candidates:`, scoredCandidates.slice(0, 3).map(c => `${c.url} (${c.score.toFixed(2)})`));
+
+  // Return best match if score is reasonable
+  if (scoredCandidates[0].score >= 0.3) {
+    console.log(`[WebDiscovery] Found likely website: ${scoredCandidates[0].url}`);
+    return scoredCandidates[0].url;
+  }
+
+  // Return first candidate if no good match
+  console.log(`[WebDiscovery] Using first candidate: ${scoredCandidates[0].url}`);
+  return scoredCandidates[0].url;
 }
 
 /**
