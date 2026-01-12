@@ -80,14 +80,14 @@ const DEFAULT_OPTIONS: EnrichmentOptions = {
   searchCompaniesHouse: true,
   guessEmails: true,
   searchLinkedIn: true,   // Now enabled by default
-  googleDork: true,       // Enable Google/Bing dorking
+  googleDork: false,      // Disabled - redundant with LinkedIn search
   searchArchive: false,   // Off by default (slow)
-  lookupWhois: true,      // WHOIS lookup enabled
-  discoverSocialMedia: true, // Social media discovery enabled
-  maxEmailGuesses: 5,
+  lookupWhois: false,     // Disabled - slow and low value
+  discoverSocialMedia: false, // Disabled - slow, use LinkedIn instead
+  maxEmailGuesses: 3,
   maxLinkedInProfiles: 5,
-  maxDorkQueries: 3,
-  maxArchiveSnapshots: 3,
+  maxDorkQueries: 2,
+  maxArchiveSnapshots: 2,
 };
 
 /**
@@ -184,87 +184,120 @@ export async function enrichBusiness(
     result.totalReviews = parseInt(business.review_count || '0');
   }
 
-  // Step 0: Discover website if we don't have one
+  // ========== PHASE 1: Run initial searches in PARALLEL ==========
+  // Website discovery, Companies House, and LinkedIn search can all run at the same time
   let websiteToUse = business.website;
-  if (opts.discoverWebsite && !websiteToUse) {
-    try {
-      console.log(`[Enrich] No website provided - searching Google...`);
-      const discoveredSite = await discoverWebsite(
-        business.name,
-        business.postcode || result.addresses[0]?.postcode || ''
-      );
-      if (discoveredSite) {
-        websiteToUse = discoveredSite;
-        result.website = discoveredSite;
-        sources.push('website-discovery');
-        console.log(`[Enrich] Discovered website: ${discoveredSite}`);
-      }
-    } catch (err) {
-      errors.push(`Website discovery failed: ${err}`);
-    }
+  const postcode = business.postcode || result.addresses[0]?.postcode || '';
+
+  console.log(`[Enrich] Starting parallel searches...`);
+
+  const parallelResults = await Promise.allSettled([
+    // Task 1: Discover website if needed
+    (!websiteToUse && opts.discoverWebsite)
+      ? discoverWebsite(business.name, postcode)
+      : Promise.resolve(null),
+
+    // Task 2: Companies House search
+    opts.searchCompaniesHouse
+      ? searchCompaniesHouse(business.name, postcode)
+      : Promise.resolve(null),
+
+    // Task 3: LinkedIn search
+    opts.searchLinkedIn
+      ? searchLinkedIn(business.name, postcode, opts.maxLinkedInProfiles || 5)
+      : Promise.resolve(null),
+  ]);
+
+  // Process website discovery result
+  const websiteResult = parallelResults[0];
+  if (websiteResult.status === 'fulfilled' && websiteResult.value) {
+    websiteToUse = websiteResult.value;
+    result.website = websiteResult.value;
+    sources.push('website-discovery');
+    console.log(`[Enrich] Discovered website: ${websiteResult.value}`);
+  } else if (websiteResult.status === 'rejected') {
+    errors.push(`Website discovery failed: ${websiteResult.reason}`);
   }
 
-  // Step 0.5: If still no website, search directly for contact info via Bing
-  if (!websiteToUse) {
-    try {
-      console.log(`[Enrich] No website found - searching Bing for direct contacts...`);
-      const directContacts = await searchDirectContacts(
-        business.name,
-        business.postcode || result.addresses[0]?.postcode || ''
-      );
+  // Process Companies House result
+  const chResult = parallelResults[1];
+  if (chResult.status === 'fulfilled' && chResult.value) {
+    const chData = chResult.value;
+    sources.push('companies-house');
+    result.companiesHouse = chData;
 
-      // Add emails from direct search
-      for (const email of directContacts.emails) {
-        if (!result.emails.some(e => e.address === email.address)) {
-          result.emails.push(email);
+    if (chData.registeredAddress) {
+      result.addresses.push({
+        full: chData.registeredAddress,
+        postcode: extractPostcode(chData.registeredAddress),
+        type: 'registered',
+        source: 'companies-house',
+      });
+    }
+
+    for (const director of chData.directors) {
+      const { firstName, lastName } = parseName(director.name);
+      if (!result.people.some(p => p.name.toLowerCase() === director.name.toLowerCase())) {
+        result.people.push({
+          name: director.name,
+          firstName,
+          lastName,
+          role: director.role,
+          source: 'companies-house',
+          appointedDate: director.appointedOn,
+          emails: [],
+        });
+      }
+    }
+    console.log(`[Enrich] Found Companies House data with ${chData.directors.length} directors`);
+  } else if (chResult.status === 'rejected') {
+    errors.push(`Companies House search failed: ${chResult.reason}`);
+  }
+
+  // Process LinkedIn result
+  const linkedInResult = parallelResults[2];
+  if (linkedInResult.status === 'fulfilled' && linkedInResult.value) {
+    const liResults = linkedInResult.value as LinkedInSearchResult;
+    if (liResults.profiles.length > 0) {
+      sources.push('linkedin-search');
+
+      if (liResults.companyPage && !result.socialMedia.linkedin) {
+        result.socialMedia.linkedin = liResults.companyPage.url;
+        result.socialMedia.linkedinType = 'company';
+      }
+
+      const decisionMakerPersons = linkedInProfilesToPersons(liResults.decisionMakers);
+      for (const person of decisionMakerPersons) {
+        if (!result.people.some(p => p.linkedin === person.linkedin || p.name.toLowerCase() === person.name.toLowerCase())) {
+          result.people.push(person);
         }
       }
 
-      // Add phones from direct search
-      for (const phone of directContacts.phones) {
-        const digits = phone.number.replace(/\D/g, '');
-        if (!result.phones.some(p => p.number.replace(/\D/g, '') === digits)) {
-          result.phones.push({
-            number: phone.number,
-            type: phone.type,
-            source: phone.source,
-            verified: false,
-          });
+      const employeePersons = linkedInProfilesToPersons(liResults.employees);
+      for (const person of employeePersons) {
+        if (!result.people.some(p => p.linkedin === person.linkedin || p.name.toLowerCase() === person.name.toLowerCase())) {
+          result.people.push(person);
         }
       }
-
-      // If we found a website, use it
-      if (directContacts.website) {
-        websiteToUse = directContacts.website;
-        result.website = directContacts.website;
-        sources.push('direct-contact-search');
-        console.log(`[Enrich] Found website via direct search: ${directContacts.website}`);
-      }
-
-      if (directContacts.emails.length > 0 || directContacts.phones.length > 0) {
-        sources.push('bing-direct-search');
-        console.log(`[Enrich] Found ${directContacts.emails.length} emails, ${directContacts.phones.length} phones via Bing`);
-      }
-    } catch (err) {
-      errors.push(`Direct contact search failed: ${err}`);
+      console.log(`[Enrich] Found ${liResults.profiles.length} LinkedIn profiles`);
     }
+  } else if (linkedInResult.status === 'rejected') {
+    errors.push(`LinkedIn search failed: ${linkedInResult.reason}`);
   }
 
-  // Step 1: Crawl website for detailed info
+  // ========== PHASE 2: Website crawl (needs website from Phase 1) ==========
   if (opts.crawlWebsite && websiteToUse) {
     try {
       console.log(`[Enrich] Crawling website: ${websiteToUse}`);
       const crawlResult = await crawlWebsite(websiteToUse);
       sources.push('website-crawl');
 
-      // Add emails
       for (const email of crawlResult.emails) {
         if (!result.emails.some(e => e.address === email.address)) {
           result.emails.push(email);
         }
       }
 
-      // Add phones
       for (const phone of crawlResult.phones) {
         const digits = phone.number.replace(/\D/g, '');
         if (!result.phones.some(p => p.number.replace(/\D/g, '') === digits)) {
@@ -272,17 +305,14 @@ export async function enrichBusiness(
         }
       }
 
-      // Add people
       for (const person of crawlResult.people) {
         if (!result.people.some(p => p.name.toLowerCase() === person.name.toLowerCase())) {
           result.people.push(person);
         }
       }
 
-      // Merge social media
       result.socialMedia = { ...result.socialMedia, ...crawlResult.socialMedia };
 
-      // Update address if found better one
       if (crawlResult.address && !result.addresses.some(a => a.type === 'trading' && a.full)) {
         result.addresses = result.addresses.filter(a => a.type !== 'trading' || a.full);
         result.addresses.push({
@@ -293,10 +323,8 @@ export async function enrichBusiness(
         });
       }
 
-      // Add LinkedIn profiles as potential people
       for (const profile of crawlResult.linkedinProfiles) {
         if (!result.people.some(p => p.linkedin === profile)) {
-          // Extract name from LinkedIn URL if possible
           const nameMatch = profile.match(/linkedin\.com\/in\/([^/?]+)/);
           if (nameMatch) {
             const urlName = nameMatch[1].replace(/-/g, ' ');
@@ -315,82 +343,30 @@ export async function enrichBusiness(
           }
         }
       }
-
+      console.log(`[Enrich] Website crawl found ${crawlResult.emails.length} emails, ${crawlResult.phones.length} phones`);
     } catch (err) {
       errors.push(`Website crawl failed: ${err}`);
     }
   }
 
-  // Step 2: Search Companies House
-  if (opts.searchCompaniesHouse) {
-    try {
-      console.log(`[Enrich] Searching Companies House...`);
-      const chData = await searchCompaniesHouse(
-        business.name,
-        business.postcode || result.addresses[0]?.postcode
-      );
-
-      if (chData) {
-        sources.push('companies-house');
-        result.companiesHouse = chData;
-
-        // Add registered address
-        if (chData.registeredAddress) {
-          result.addresses.push({
-            full: chData.registeredAddress,
-            postcode: extractPostcode(chData.registeredAddress),
-            type: 'registered',
-            source: 'companies-house',
-          });
-        }
-
-        // Add directors as people
-        for (const director of chData.directors) {
-          const { firstName, lastName } = parseName(director.name);
-          if (!result.people.some(p => p.name.toLowerCase() === director.name.toLowerCase())) {
-            result.people.push({
-              name: director.name,
-              firstName,
-              lastName,
-              role: director.role,
-              source: 'companies-house',
-              appointedDate: director.appointedOn,
-              emails: [],
-            });
-          }
-        }
-      }
-    } catch (err) {
-      errors.push(`Companies House search failed: ${err}`);
-    }
-  }
-
-  // Step 3: Guess emails for people (if we have a domain)
+  // Step 3: Guess emails for people (if we have a domain) - FAST
   if (opts.guessEmails && websiteToUse && result.people.length > 0) {
     try {
-      console.log(`[Enrich] Guessing emails for ${result.people.length} people...`);
-
-      // Extract domain from website
-      const domain = websiteToUse
-        .replace(/^(https?:\/\/)?(www\.)?/, '')
-        .split('/')[0];
-
-      // Get existing emails for pattern detection
+      const domain = websiteToUse.replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
       const existingEmails = result.emails.map(e => e.address);
 
-      // Guess emails for team
+      // Only guess for top 3 people to save time
+      const topPeople = result.people.slice(0, 3);
       const emailGuesses = await guessEmailsForTeam(
         domain,
-        result.people.map(p => ({ firstName: p.firstName, lastName: p.lastName, role: p.role })),
+        topPeople.map(p => ({ firstName: p.firstName, lastName: p.lastName, role: p.role })),
         existingEmails
       );
 
-      // Add guessed emails to people and main email list
-      for (const person of result.people) {
+      for (const person of topPeople) {
         const key = `${person.firstName} ${person.lastName}`;
         const guesses = emailGuesses.get(key);
         if (guesses && guesses.length > 0) {
-          // Add top guess to person
           const topGuess = guesses[0];
           person.emails.push({
             address: topGuess.email,
@@ -402,133 +378,42 @@ export async function enrichBusiness(
             verificationMethod: topGuess.verificationMethod,
           });
 
-          // Add to main email list if high confidence
-          if (topGuess.confidence === 'high' || topGuess.confidence === 'medium') {
-            if (!result.emails.some(e => e.address === topGuess.email)) {
-              result.emails.push({
-                address: topGuess.email,
-                type: 'personal',
-                source: 'guessed',
-                personName: person.name,
-                verified: false,
-                confidence: topGuess.confidence,
-                verificationMethod: topGuess.verificationMethod,
-              });
-            }
+          if ((topGuess.confidence === 'high' || topGuess.confidence === 'medium') &&
+              !result.emails.some(e => e.address === topGuess.email)) {
+            result.emails.push({
+              address: topGuess.email,
+              type: 'personal',
+              source: 'guessed',
+              personName: person.name,
+              verified: false,
+              confidence: topGuess.confidence,
+              verificationMethod: topGuess.verificationMethod,
+            });
           }
         }
       }
-
       sources.push('email-guesser');
     } catch (err) {
       errors.push(`Email guessing failed: ${err}`);
     }
   }
 
-  // Step 4: Enhanced LinkedIn search with profile extraction
-  if (opts.searchLinkedIn) {
-    try {
-      console.log(`[Enrich] Searching for LinkedIn profiles (enhanced)...`);
-      const location = business.postcode || result.addresses[0]?.postcode || '';
-
-      // Use enhanced LinkedIn scraper
-      const linkedInResults: LinkedInSearchResult = await searchLinkedIn(
-        business.name,
-        location,
-        opts.maxLinkedInProfiles || 10
-      );
-
-      if (linkedInResults.profiles.length > 0) {
-        sources.push('linkedin-search');
-
-        // Set company LinkedIn page
-        if (linkedInResults.companyPage && !result.socialMedia.linkedin) {
-          result.socialMedia.linkedin = linkedInResults.companyPage.url;
-          result.socialMedia.linkedinType = 'company';
-        }
-
-        // Add decision makers first (higher priority)
-        const decisionMakerPersons = linkedInProfilesToPersons(linkedInResults.decisionMakers);
-        for (const person of decisionMakerPersons) {
-          if (!result.people.some(p =>
-            p.linkedin === person.linkedin ||
-            p.name.toLowerCase() === person.name.toLowerCase()
-          )) {
-            result.people.push(person);
-          }
-        }
-
-        // Add other employees
-        const employeePersons = linkedInProfilesToPersons(linkedInResults.employees);
-        for (const person of employeePersons) {
-          if (!result.people.some(p =>
-            p.linkedin === person.linkedin ||
-            p.name.toLowerCase() === person.name.toLowerCase()
-          )) {
-            result.people.push(person);
-          }
-        }
-
-        console.log(`[Enrich] Added ${decisionMakerPersons.length} decision makers, ${employeePersons.length} employees from LinkedIn`);
-      }
-
-      // Also enrich existing people without LinkedIn profiles
-      if (result.people.length > 0) {
-        const peopleWithoutLinkedIn = result.people.filter(p => !p.linkedin);
-        if (peopleWithoutLinkedIn.length > 0 && peopleWithoutLinkedIn.length <= 3) {
-          console.log(`[Enrich] Enriching ${peopleWithoutLinkedIn.length} people with LinkedIn profiles...`);
-          const enrichedPeople = await enrichPeopleWithLinkedIn(
-            result.people,
-            business.name,
-            location,
-            2
-          );
-          result.people = enrichedPeople;
-        }
-      }
-    } catch (err) {
-      errors.push(`LinkedIn search failed: ${err}`);
-    }
-  }
-
-  // Step 5: Google/Bing Dorking for additional emails
+  // Step 4: Google/Bing Dorking for additional emails (OPTIONAL - disabled by default for speed)
   if (opts.googleDork && websiteToUse) {
     try {
-      const domain = websiteToUse
-        .replace(/^(https?:\/\/)?(www\.)?/, '')
-        .split('/')[0];
-
-      console.log(`[Enrich] Running Google/Bing dorking for: ${domain}`);
+      const domain = websiteToUse.replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0];
       const dorkResults = await combinedSearch(domain, business.name);
 
-      // Add discovered emails
       for (const email of dorkResults.emails) {
         if (!result.emails.some(e => e.address === email.address)) {
           result.emails.push(email);
         }
       }
 
-      // Add LinkedIn profiles from Bing search
       for (const linkedinUrl of dorkResults.linkedinUrls) {
         if (!result.socialMedia.linkedin && linkedinUrl.includes('/company/')) {
           result.socialMedia.linkedin = linkedinUrl;
           result.socialMedia.linkedinType = 'company';
-        }
-        if (linkedinUrl.includes('/in/') && !result.people.some(p => p.linkedin === linkedinUrl)) {
-          const nameMatch = linkedinUrl.match(/linkedin\.com\/in\/([^/?]+)/);
-          if (nameMatch) {
-            const urlName = nameMatch[1].replace(/-/g, ' ');
-            const { firstName, lastName } = parseName(urlName);
-            result.people.push({
-              name: urlName,
-              firstName,
-              lastName,
-              role: 'Unknown',
-              source: 'linkedin',
-              emails: [],
-              linkedin: linkedinUrl,
-            });
-          }
         }
       }
 
@@ -540,114 +425,7 @@ export async function enrichBusiness(
     }
   }
 
-  // Step 6: Archive.org Historical Search (optional - can be slow)
-  if (opts.searchArchive && websiteToUse) {
-    try {
-      const domain = websiteToUse
-        .replace(/^(https?:\/\/)?(www\.)?/, '')
-        .split('/')[0];
-
-      console.log(`[Enrich] Searching Archive.org for: ${domain}`);
-      const archiveResults = await scrapeWaybackMachine(domain, opts.maxArchiveSnapshots || 3);
-      const archiveEmails = archiveResultsToEmails(archiveResults);
-
-      // Add historical emails (lower confidence)
-      for (const email of archiveEmails) {
-        if (!result.emails.some(e => e.address === email.address)) {
-          result.emails.push(email);
-        }
-      }
-
-      if (archiveEmails.length > 0) {
-        sources.push('archive');
-        console.log(`[Enrich] Found ${archiveEmails.length} historical emails from Archive.org`);
-      }
-    } catch (err) {
-      errors.push(`Archive search failed: ${err}`);
-    }
-  }
-
-  // Step 7: WHOIS Data Extraction
-  if (opts.lookupWhois && websiteToUse) {
-    try {
-      console.log(`[Enrich] Looking up WHOIS data...`);
-      const whoisData = await lookupWhois(websiteToUse);
-
-      if (whoisData) {
-        // Add emails from WHOIS
-        const whoisEmails = whoisToEmails(whoisData);
-        for (const email of whoisEmails) {
-          if (!result.emails.some(e => e.address === email.address)) {
-            result.emails.push(email);
-          }
-        }
-
-        // Add registrant as potential contact
-        const registrantInfo = whoisToPersonInfo(whoisData);
-        if (registrantInfo && registrantInfo.name) {
-          // Only add if it looks like a person name (not a company)
-          const nameParts = registrantInfo.name.split(/\s+/);
-          if (nameParts.length >= 2 && !registrantInfo.name.includes('Ltd') &&
-              !registrantInfo.name.includes('Limited') && !registrantInfo.name.includes('LLC')) {
-            const { firstName, lastName } = parseName(registrantInfo.name);
-            if (!result.people.some(p => p.name.toLowerCase() === registrantInfo.name!.toLowerCase())) {
-              result.people.push({
-                name: registrantInfo.name,
-                firstName,
-                lastName,
-                role: 'Domain Registrant',
-                source: 'whois',
-                emails: registrantInfo.email ? [{
-                  address: registrantInfo.email,
-                  type: 'personal',
-                  source: 'whois',
-                  verified: false,
-                  confidence: 'medium',
-                }] : [],
-              });
-            }
-          }
-        }
-
-        // Store domain age for potential scoring use
-        const domainAge = getDomainAge(whoisData);
-        if (domainAge !== null) {
-          console.log(`[Enrich] Domain age: ${domainAge} years`);
-        }
-
-        if (whoisEmails.length > 0 || registrantInfo) {
-          sources.push('whois');
-        }
-      }
-    } catch (err) {
-      errors.push(`WHOIS lookup failed: ${err}`);
-    }
-  }
-
-  // Step 8: Enhanced Social Media Discovery
-  if (opts.discoverSocialMedia) {
-    try {
-      console.log(`[Enrich] Discovering social media profiles...`);
-      const socialResults = await discoverSocialMedia(
-        business.name,
-        websiteToUse,
-        result.socialMedia
-      );
-
-      // Merge with existing social media data
-      result.socialMedia = mergeSocialMedia(result.socialMedia, socialResults);
-
-      if (socialResults.profiles.length > 0) {
-        sources.push('social-media');
-        console.log(`[Enrich] Found ${socialResults.profiles.length} social profiles`);
-      }
-    } catch (err) {
-      errors.push(`Social media discovery failed: ${err}`);
-    }
-  }
-
-  // Step 9: Calculate final lead score
-  console.log(`[Enrich] Calculating lead score...`);
+  // Final Step: Calculate lead score
   result.leadScore = calculateLeadScore({
     website: result.website,
     emails: result.emails,
