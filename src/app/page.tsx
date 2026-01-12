@@ -2,6 +2,42 @@
 
 import { useState } from "react";
 
+interface Director {
+  name: string;
+  role: string;
+  appointedOn: string;
+  resignedOn?: string;
+}
+
+interface SicCode {
+  code: string;
+  description: string;
+}
+
+interface EmailInfo {
+  address: string;
+  type: 'generic' | 'personal';
+  source: string;
+}
+
+interface SocialMedia {
+  linkedin?: string;
+  facebook?: string;
+  twitter?: string;
+  instagram?: string;
+}
+
+interface ScoreBreakdown {
+  noWebsite: number;
+  noEmail: number;
+  genericEmailOnly: number;
+  lowReviews: number;
+  noSocial: number;
+  establishedBusiness: number;
+  hasDirectors: number;
+  soleTrader: number;
+}
+
 interface Business {
   name: string;
   email: string;
@@ -17,6 +53,19 @@ interface Business {
   lead_score: number;
   lead_signals: string[];
   distance?: string;
+  // Enriched fields
+  companyNumber?: string;
+  companyStatus?: string;
+  companyType?: string;
+  incorporationDate?: string;
+  registeredAddress?: string;
+  sicCodes?: SicCode[];
+  directors?: Director[];
+  emails?: EmailInfo[];
+  socialMedia?: SocialMedia;
+  scoreBreakdown?: ScoreBreakdown;
+  enriched?: boolean;
+  enriching?: boolean;
 }
 
 interface SearchParams {
@@ -179,6 +228,16 @@ const BUSINESS_CATEGORIES = {
     "Equestrian",
     "Veterinarian",
   ],
+  "Commercial Property": [
+    "Industrial Estate",
+    "Business Park",
+    "Office Space",
+    "Warehouse",
+    "Commercial Unit",
+    "Retail Unit",
+    "Factory Unit",
+    "Distribution Centre",
+  ],
 };
 
 const RADIUS_OPTIONS = [
@@ -200,9 +259,9 @@ const DATA_SOURCES = [
   { id: "thomson", name: "Thomson", description: "Thomson Local" },
   { id: "scoot", name: "Scoot", description: "UK Directory" },
   { id: "118", name: "118118", description: "UK Directory" },
+  { id: "novaloca", name: "NovaLoca", description: "Commercial Property" },
 ];
 
-// All available data sources - always search all
 const ALL_SOURCES = DATA_SOURCES.map(s => s.id);
 
 export default function Home() {
@@ -210,7 +269,7 @@ export default function Home() {
     query: "",
     postcode: "",
     radius: "10",
-    sources: ALL_SOURCES, // Always use all sources
+    sources: ALL_SOURCES,
     maxPages: 5,
   });
   const [customQuery, setCustomQuery] = useState("");
@@ -218,6 +277,9 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [searchComplete, setSearchComplete] = useState(false);
+  const [selectedBusinesses, setSelectedBusinesses] = useState<Set<number>>(new Set());
+  const [bulkEnriching, setBulkEnriching] = useState(false);
+  const [expandedBusiness, setExpandedBusiness] = useState<number | null>(null);
 
   const handleSearch = async () => {
     const query = customQuery || searchParams.query;
@@ -234,6 +296,7 @@ export default function Home() {
     setLoading(true);
     setSearchComplete(false);
     setResults([]);
+    setSelectedBusinesses(new Set());
 
     try {
       const response = await fetch("/api/scrape", {
@@ -243,9 +306,9 @@ export default function Home() {
           query,
           location: searchParams.postcode,
           radius: searchParams.radius,
-          sources: ALL_SOURCES, // Always use all sources
+          sources: ALL_SOURCES,
           max_pages: searchParams.maxPages,
-          enrich_emails: true, // Request email enrichment
+          enrich_emails: true,
         }),
       });
 
@@ -263,6 +326,121 @@ export default function Home() {
     }
   };
 
+  const enrichBusiness = async (index: number) => {
+    const business = results[index];
+    if (business.enriched || business.enriching) return;
+
+    // Mark as enriching
+    setResults(prev => prev.map((b, i) =>
+      i === index ? { ...b, enriching: true } : b
+    ));
+
+    try {
+      const response = await fetch("/api/enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessName: business.name,
+          website: business.website,
+          postcode: business.postcode,
+          rating: business.rating,
+          review_count: business.review_count,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Enrichment failed");
+      }
+
+      const data = await response.json();
+
+      setResults(prev => prev.map((b, i) =>
+        i === index ? {
+          ...b,
+          ...data.enrichedData,
+          lead_score: data.newLeadScore || b.lead_score,
+          enriched: true,
+          enriching: false,
+        } : b
+      ));
+    } catch (err) {
+      setResults(prev => prev.map((b, i) =>
+        i === index ? { ...b, enriching: false } : b
+      ));
+    }
+  };
+
+  const enrichSelected = async () => {
+    if (selectedBusinesses.size === 0) return;
+    setBulkEnriching(true);
+
+    const selectedIndices = Array.from(selectedBusinesses);
+    const businessesToEnrich = selectedIndices.map(i => results[i]).filter(b => !b.enriched);
+
+    try {
+      const response = await fetch("/api/enrich", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businesses: businessesToEnrich.map(b => ({
+            name: b.name,
+            website: b.website,
+            postcode: b.postcode,
+            rating: b.rating,
+            review_count: b.review_count,
+          })),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Bulk enrichment failed");
+      }
+
+      const data = await response.json();
+
+      // Update results with enriched data
+      setResults(prev => {
+        const updated = [...prev];
+        for (const result of data.results) {
+          const idx = updated.findIndex(b => b.name === result.originalName);
+          if (idx !== -1 && result.enrichedData) {
+            updated[idx] = {
+              ...updated[idx],
+              ...result.enrichedData,
+              lead_score: result.newLeadScore || updated[idx].lead_score,
+              enriched: true,
+            };
+          }
+        }
+        return updated;
+      });
+    } catch (err) {
+      setError("Bulk enrichment failed");
+    } finally {
+      setBulkEnriching(false);
+    }
+  };
+
+  const toggleSelect = (index: number) => {
+    setSelectedBusinesses(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(index)) {
+        newSet.delete(index);
+      } else {
+        newSet.add(index);
+      }
+      return newSet;
+    });
+  };
+
+  const selectAll = () => {
+    if (selectedBusinesses.size === results.length) {
+      setSelectedBusinesses(new Set());
+    } else {
+      setSelectedBusinesses(new Set(results.map((_, i) => i)));
+    }
+  };
+
   const exportCSV = () => {
     if (results.length === 0) return;
 
@@ -272,6 +450,7 @@ export default function Home() {
       "Lead Signals",
       "Distance",
       "Email",
+      "All Emails",
       "Phone",
       "Website",
       "Address",
@@ -280,24 +459,48 @@ export default function Home() {
       "Rating",
       "Reviews",
       "Source",
+      "Company Number",
+      "Company Status",
+      "Company Type",
+      "Incorporation Date",
+      "Registered Address",
+      "Directors",
+      "SIC Codes",
+      "LinkedIn",
+      "Facebook",
+      "Twitter",
+      "Instagram",
     ];
+
     const csvContent = [
       headers.join(","),
       ...results.map((b) =>
         [
-          `"${b.name}"`,
-          `"${b.lead_score}"`,
+          `"${(b.name || '').replace(/"/g, '""')}"`,
+          `"${b.lead_score || ''}"`,
           `"${(b.lead_signals || []).join("; ")}"`,
-          `"${b.distance || ""}"`,
-          `"${b.email}"`,
-          `"${b.phone}"`,
-          `"${b.website}"`,
-          `"${b.address}"`,
-          `"${b.postcode}"`,
-          `"${b.industry}"`,
-          `"${b.rating}"`,
-          `"${b.review_count}"`,
-          `"${b.source}"`,
+          `"${b.distance || ''}"`,
+          `"${b.email || ''}"`,
+          `"${(b.emails || []).map(e => `${e.address} (${e.type})`).join("; ")}"`,
+          `"${b.phone || ''}"`,
+          `"${b.website || ''}"`,
+          `"${(b.address || '').replace(/"/g, '""')}"`,
+          `"${b.postcode || ''}"`,
+          `"${b.industry || ''}"`,
+          `"${b.rating || ''}"`,
+          `"${b.review_count || ''}"`,
+          `"${b.source || ''}"`,
+          `"${b.companyNumber || ''}"`,
+          `"${b.companyStatus || ''}"`,
+          `"${b.companyType || ''}"`,
+          `"${b.incorporationDate || ''}"`,
+          `"${(b.registeredAddress || '').replace(/"/g, '""')}"`,
+          `"${(b.directors || []).map(d => `${d.name} (${d.role})`).join("; ")}"`,
+          `"${(b.sicCodes || []).map(s => `${s.code}: ${s.description}`).join("; ")}"`,
+          `"${b.socialMedia?.linkedin || ''}"`,
+          `"${b.socialMedia?.facebook || ''}"`,
+          `"${b.socialMedia?.twitter || ''}"`,
+          `"${b.socialMedia?.instagram || ''}"`,
         ].join(",")
       ),
     ].join("\n");
@@ -323,14 +526,24 @@ export default function Home() {
     a.click();
   };
 
+  const getStatusColor = (status?: string) => {
+    switch (status) {
+      case 'active': return 'bg-green-100 text-green-800';
+      case 'dissolved': return 'bg-red-100 text-red-800';
+      case 'dormant': return 'bg-yellow-100 text-yellow-800';
+      case 'liquidation': return 'bg-red-100 text-red-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
   return (
-    <main className="max-w-6xl mx-auto px-4 py-8">
+    <main className="max-w-7xl mx-auto px-4 py-8">
       <div className="text-center mb-8">
         <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          UK Business Scraper
+          UK Business Lead Scraper
         </h1>
         <p className="text-gray-600">
-          Search local UK businesses across multiple directories
+          Search UK businesses with Companies House enrichment
         </p>
       </div>
 
@@ -444,14 +657,12 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Error */}
         {error && (
           <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
             {error}
           </div>
         )}
 
-        {/* Search Button */}
         <button
           onClick={handleSearch}
           disabled={loading}
@@ -486,21 +697,34 @@ export default function Home() {
       {/* Results */}
       {searchComplete && (
         <div className="bg-white rounded-xl shadow-lg p-6">
-          <div className="flex justify-between items-center mb-6">
+          <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
             <h2 className="text-xl font-semibold">
               Found {results.length} businesses
             </h2>
             {results.length > 0 && (
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={selectAll}
+                  className="px-3 py-1.5 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50"
+                >
+                  {selectedBusinesses.size === results.length ? "Deselect All" : "Select All"}
+                </button>
+                <button
+                  onClick={enrichSelected}
+                  disabled={selectedBusinesses.size === 0 || bulkEnriching}
+                  className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:bg-gray-400"
+                >
+                  {bulkEnriching ? "Enriching..." : `Enrich Selected (${selectedBusinesses.size})`}
+                </button>
                 <button
                   onClick={exportCSV}
-                  className="px-4 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors"
+                  className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700"
                 >
                   Export CSV
                 </button>
                 <button
                   onClick={exportJSON}
-                  className="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors"
+                  className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700"
                 >
                   Export JSON
                 </button>
@@ -525,36 +749,81 @@ export default function Home() {
                       : "border-gray-200"
                   }`}
                 >
-                  <div className="flex justify-between items-start">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <h3 className="font-semibold text-lg text-gray-900">
-                          {business.name}
-                        </h3>
-                        <span
-                          className={`px-2 py-1 rounded-full text-xs font-bold ${
-                            business.lead_score >= 80
-                              ? "bg-green-600 text-white"
-                              : business.lead_score >= 60
-                              ? "bg-yellow-500 text-white"
-                              : "bg-gray-400 text-white"
-                          }`}
-                        >
-                          {business.lead_score}% Match
-                        </span>
-                        {business.distance && (
-                          <span className="px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-700">
-                            {business.distance} away
+                  <div className="flex justify-between items-start gap-4">
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedBusinesses.has(index)}
+                        onChange={() => toggleSelect(index)}
+                        className="mt-1.5 h-4 w-4 rounded border-gray-300"
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <h3 className="font-semibold text-lg text-gray-900">
+                            {business.name}
+                          </h3>
+                          <span
+                            className={`px-2 py-1 rounded-full text-xs font-bold ${
+                              business.lead_score >= 80
+                                ? "bg-green-600 text-white"
+                                : business.lead_score >= 60
+                                ? "bg-yellow-500 text-white"
+                                : "bg-gray-400 text-white"
+                            }`}
+                          >
+                            {business.lead_score}% Match
                           </span>
+                          {business.distance && (
+                            <span className="px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-700">
+                              {business.distance}
+                            </span>
+                          )}
+                          {business.companyStatus && (
+                            <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(business.companyStatus)}`}>
+                              {business.companyStatus}
+                            </span>
+                          )}
+                          {business.enriched && (
+                            <span className="px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-700">
+                              Enriched
+                            </span>
+                          )}
+                        </div>
+                        {business.industry && (
+                          <p className="text-sm text-blue-600">{business.industry}</p>
+                        )}
+                        {business.companyNumber && (
+                          <p className="text-xs text-gray-500">
+                            Co. #{business.companyNumber} | {business.companyType}
+                            {business.incorporationDate && ` | Inc. ${business.incorporationDate}`}
+                          </p>
                         )}
                       </div>
-                      {business.industry && (
-                        <p className="text-sm text-blue-600">{business.industry}</p>
-                      )}
                     </div>
-                    <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
-                      {business.source}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => enrichBusiness(index)}
+                        disabled={business.enriched || business.enriching}
+                        className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
+                          business.enriched
+                            ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                            : business.enriching
+                            ? "bg-indigo-200 text-indigo-700"
+                            : "bg-indigo-600 text-white hover:bg-indigo-700"
+                        }`}
+                      >
+                        {business.enriching ? "Enriching..." : business.enriched ? "Enriched" : "Enrich"}
+                      </button>
+                      <button
+                        onClick={() => setExpandedBusiness(expandedBusiness === index ? null : index)}
+                        className="px-2 py-1.5 text-xs border border-gray-300 rounded-lg hover:bg-gray-50"
+                      >
+                        {expandedBusiness === index ? "Less" : "More"}
+                      </button>
+                      <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                        {business.source}
+                      </span>
+                    </div>
                   </div>
 
                   {/* Lead Signals */}
@@ -571,46 +840,46 @@ export default function Home() {
                     </div>
                   )}
 
+                  {/* Basic Info */}
                   <div className="mt-3 grid md:grid-cols-2 gap-2 text-sm text-gray-600">
                     {business.address && (
-                      <p className="flex items-center gap-2">
-                        <span className="text-gray-400">Address:</span>
-                        {business.address}
-                        {business.postcode && ` (${business.postcode})`}
+                      <p className="flex items-start gap-2">
+                        <span className="text-gray-400 shrink-0">Address:</span>
+                        <span>{business.address}{business.postcode && ` (${business.postcode})`}</span>
                       </p>
                     )}
                     {business.phone && (
                       <p className="flex items-center gap-2">
                         <span className="text-gray-400">Phone:</span>
-                        <a
-                          href={`tel:${business.phone}`}
-                          className="text-blue-600 hover:underline"
-                        >
+                        <a href={`tel:${business.phone}`} className="text-blue-600 hover:underline">
                           {business.phone}
                         </a>
                       </p>
                     )}
-                    {business.email && (
+                    {(business.email || (business.emails && business.emails.length > 0)) && (
                       <p className="flex items-center gap-2">
                         <span className="text-gray-400">Email:</span>
                         <a
-                          href={`mailto:${business.email}`}
+                          href={`mailto:${business.emails?.[0]?.address || business.email}`}
                           className="text-blue-600 hover:underline"
                         >
-                          {business.email}
+                          {business.emails?.[0]?.address || business.email}
                         </a>
+                        {business.emails && business.emails.length > 1 && (
+                          <span className="text-xs text-gray-500">+{business.emails.length - 1} more</span>
+                        )}
                       </p>
                     )}
                     {business.website && (
                       <p className="flex items-center gap-2">
                         <span className="text-gray-400">Website:</span>
                         <a
-                          href={business.website}
+                          href={business.website.startsWith('http') ? business.website : `https://${business.website}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-blue-600 hover:underline truncate max-w-xs"
                         >
-                          {business.website}
+                          {business.website.replace(/^https?:\/\//, '')}
                         </a>
                       </p>
                     )}
@@ -623,6 +892,34 @@ export default function Home() {
                         </span>
                       </p>
                     )}
+                    {/* Social Media */}
+                    {business.socialMedia && (
+                      <p className="flex items-center gap-2">
+                        <span className="text-gray-400">Social:</span>
+                        <span className="flex gap-2">
+                          {business.socialMedia.linkedin && (
+                            <a href={business.socialMedia.linkedin} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                              LinkedIn
+                            </a>
+                          )}
+                          {business.socialMedia.facebook && (
+                            <a href={business.socialMedia.facebook} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                              Facebook
+                            </a>
+                          )}
+                          {business.socialMedia.twitter && (
+                            <a href={business.socialMedia.twitter} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                              Twitter
+                            </a>
+                          )}
+                          {business.socialMedia.instagram && (
+                            <a href={business.socialMedia.instagram} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                              Instagram
+                            </a>
+                          )}
+                        </span>
+                      </p>
+                    )}
                   </div>
 
                   {business.description && (
@@ -630,12 +927,137 @@ export default function Home() {
                       {business.description}
                     </p>
                   )}
+
+                  {/* Expanded Details */}
+                  {expandedBusiness === index && (
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <div className="grid md:grid-cols-2 gap-4">
+                        {/* Directors */}
+                        {business.directors && business.directors.length > 0 && (
+                          <div>
+                            <h4 className="font-medium text-gray-900 mb-2">Directors</h4>
+                            <div className="space-y-1">
+                              {business.directors.map((director, i) => (
+                                <div key={i} className="text-sm">
+                                  <span className="font-medium">{director.name}</span>
+                                  <span className="text-gray-500"> - {director.role}</span>
+                                  {director.appointedOn && (
+                                    <span className="text-gray-400 text-xs"> (since {director.appointedOn})</span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* All Emails */}
+                        {business.emails && business.emails.length > 0 && (
+                          <div>
+                            <h4 className="font-medium text-gray-900 mb-2">Emails Found</h4>
+                            <div className="space-y-1">
+                              {business.emails.map((email, i) => (
+                                <div key={i} className="text-sm flex items-center gap-2">
+                                  <a href={`mailto:${email.address}`} className="text-blue-600 hover:underline">
+                                    {email.address}
+                                  </a>
+                                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                    email.type === 'personal' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
+                                  }`}>
+                                    {email.type}
+                                  </span>
+                                  <span className="text-xs text-gray-400">from {email.source || 'homepage'}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* SIC Codes */}
+                        {business.sicCodes && business.sicCodes.length > 0 && (
+                          <div>
+                            <h4 className="font-medium text-gray-900 mb-2">Industry Codes (SIC)</h4>
+                            <div className="space-y-1">
+                              {business.sicCodes.map((sic, i) => (
+                                <div key={i} className="text-sm">
+                                  <span className="font-mono text-gray-500">{sic.code}</span>
+                                  <span className="text-gray-700"> - {sic.description}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Registered Address */}
+                        {business.registeredAddress && (
+                          <div>
+                            <h4 className="font-medium text-gray-900 mb-2">Registered Office</h4>
+                            <p className="text-sm text-gray-600">{business.registeredAddress}</p>
+                          </div>
+                        )}
+
+                        {/* Score Breakdown */}
+                        {business.scoreBreakdown && (
+                          <div>
+                            <h4 className="font-medium text-gray-900 mb-2">Lead Score Breakdown</h4>
+                            <div className="grid grid-cols-2 gap-1 text-xs">
+                              {business.scoreBreakdown.noWebsite > 0 && (
+                                <div className="text-orange-600">No website: +{business.scoreBreakdown.noWebsite}</div>
+                              )}
+                              {business.scoreBreakdown.noEmail > 0 && (
+                                <div className="text-orange-600">No email: +{business.scoreBreakdown.noEmail}</div>
+                              )}
+                              {business.scoreBreakdown.genericEmailOnly > 0 && (
+                                <div className="text-orange-600">Generic email only: +{business.scoreBreakdown.genericEmailOnly}</div>
+                              )}
+                              {business.scoreBreakdown.lowReviews > 0 && (
+                                <div className="text-orange-600">Low reviews: +{business.scoreBreakdown.lowReviews}</div>
+                              )}
+                              {business.scoreBreakdown.noSocial > 0 && (
+                                <div className="text-orange-600">No social media: +{business.scoreBreakdown.noSocial}</div>
+                              )}
+                              {business.scoreBreakdown.establishedBusiness > 0 && (
+                                <div className="text-green-600">Established business: +{business.scoreBreakdown.establishedBusiness}</div>
+                              )}
+                              {business.scoreBreakdown.hasDirectors > 0 && (
+                                <div className="text-green-600">Directors identified: +{business.scoreBreakdown.hasDirectors}</div>
+                              )}
+                              {business.scoreBreakdown.soleTrader > 0 && (
+                                <div className="text-blue-600">Sole trader: +{business.scoreBreakdown.soleTrader}</div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
           )}
         </div>
       )}
+
+      {/* API Key Notice */}
+      <div className="mt-8 p-4 bg-gray-100 rounded-lg">
+        <h3 className="font-medium text-gray-900 mb-2">Companies House Integration</h3>
+        <p className="text-sm text-gray-600">
+          To enable Companies House data enrichment (company registration, directors, SIC codes), add your API key to the environment variables:
+        </p>
+        <code className="mt-2 block text-xs bg-gray-200 p-2 rounded">
+          COMPANIES_HOUSE_API_KEY=your_api_key_here
+        </code>
+        <p className="text-sm text-gray-500 mt-2">
+          Get a free API key at{" "}
+          <a
+            href="https://developer.company-information.service.gov.uk/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 hover:underline"
+          >
+            developer.company-information.service.gov.uk
+          </a>
+        </p>
+      </div>
     </main>
   );
 }
