@@ -1,0 +1,14 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/scrape",
+      "destination": "/api/scrape"
+    }
+  ],
+  "functions": {
+    "api/scrape.py": {
+      "runtime": "python3.11",
+      "maxDuration": 60
+    }
+  }
+}
