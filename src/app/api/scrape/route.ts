@@ -154,19 +154,105 @@ function extractPhone(text: string): string {
   return match ? match[0].replace(/\s+/g, ' ').trim() : "";
 }
 
-function cleanText(text: string | null | undefined): string {
-  if (!text) return "";
-  return text.replace(/<[^>]*>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/\s+/g, " ").trim();
+function extractEmail(text: string): string {
+  // Look for email patterns
+  const match = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  if (match) {
+    const email = match[0].toLowerCase();
+    // Filter out common non-business emails
+    if (!email.includes('example.com') && !email.includes('test.com') && !email.includes('noreply')) {
+      return email;
+    }
+  }
+  return "";
 }
 
-function createBusiness(data: Partial<Business>, source: string, searchLocation?: string): Business {
+function cleanText(text: string | null | undefined): string {
+  if (!text) return "";
+  let cleaned = text
+    .replace(/<[^>]*>/g, '') // Remove HTML tags
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned;
+}
+
+function isValidBusinessName(name: string): boolean {
+  if (!name || name.length < 3 || name.length > 100) return false;
+  // Filter out garbage data patterns
+  const garbagePatterns = [
+    /^["']/, // Starts with quote (review text)
+    /jsname=/i, // JavaScript attributes
+    /data-/i, // Data attributes
+    /href=/i, // HTML attributes
+    /class=/i,
+    /role=/i,
+    /ping=/i,
+    /ved=/i,
+    /^\d+$/, // Just numbers
+    /^\d+\s*(reviews?|ratings?)/i, // Review counts
+    /^(more|less|see|view|show|hide|next|prev)/i, // UI elements
+    /google/i,
+    /search/i,
+    /map/i,
+    /directions/i,
+    /website/i,
+    /call/i,
+    /^open/i,
+    /^closed/i,
+    /hours/i,
+    /\.(com|co\.uk|org|net)$/i, // Domain names only
+  ];
+  return !garbagePatterns.some(pattern => pattern.test(name));
+}
+
+function cleanAddress(text: string): string {
+  if (!text) return "";
+  // Remove any HTML attributes or JavaScript that leaked through
+  let cleaned = text
+    .replace(/jsname="[^"]*"/gi, '')
+    .replace(/data-[a-z-]+="[^"]*"/gi, '')
+    .replace(/role="[^"]*"/gi, '')
+    .replace(/class="[^"]*"/gi, '')
+    .replace(/href="[^"]*"/gi, '')
+    .replace(/ping="[^"]*"/gi, '')
+    .replace(/ved="[^"]*"/gi, '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // If it still contains HTML-like garbage, return empty
+  if (cleaned.includes('=') || cleaned.includes('"') || cleaned.includes('<')) {
+    return "";
+  }
+  return cleaned;
+}
+
+function createBusiness(data: Partial<Business>, source: string, searchLocation?: string): Business | null {
+  const name = cleanText(data.name) || "";
+
+  // Validate business name
+  if (!isValidBusinessName(name)) {
+    return null;
+  }
+
+  // Clean and validate address
+  const rawAddress = data.address || "";
+  const address = cleanAddress(rawAddress) || "";
+
   const baseBusiness = {
-    name: cleanText(data.name) || "",
-    email: data.email || "",
+    name,
+    email: data.email || extractEmail(rawAddress + " " + (data.description || "")),
     phone: data.phone || "",
     website: data.website || "",
-    address: cleanText(data.address) || "",
-    postcode: data.postcode || "",
+    address,
+    postcode: data.postcode || extractPostcode(address),
     industry: cleanText(data.industry) || "",
     description: cleanText(data.description) || "",
     rating: data.rating || "",
@@ -179,6 +265,16 @@ function createBusiness(data: Partial<Business>, source: string, searchLocation?
     ? getDistanceFromPostcodes(searchLocation, baseBusiness.postcode)
     : "";
   return { ...baseBusiness, lead_score: score, lead_signals: signals, distance };
+}
+
+// Helper to safely add a business to the array
+function addBusiness(businesses: Business[], data: Partial<Business>, source: string, searchLocation?: string): boolean {
+  const biz = createBusiness(data, source, searchLocation);
+  if (biz) {
+    businesses.push(biz);
+    return true;
+  }
+  return false;
 }
 
 const HEADERS = {
@@ -218,7 +314,7 @@ async function scrapeYell(query: string, location: string, maxPages: number, sea
         try {
           const data = JSON.parse(match[1]);
           if (data["@type"] === "LocalBusiness" || data["@type"] === "Organization") {
-            const biz = createBusiness({
+            if (addBusiness(businesses, {
               name: data.name,
               address: data.address?.streetAddress || "",
               postcode: data.address?.postalCode || extractPostcode(data.address?.streetAddress || ""),
@@ -227,24 +323,23 @@ async function scrapeYell(query: string, location: string, maxPages: number, sea
               rating: data.aggregateRating?.ratingValue?.toString() || "",
               review_count: data.aggregateRating?.reviewCount?.toString() || "",
               industry: query,
-            }, "yell.com", searchLocation);
-            if (biz.name) {
-              businesses.push(biz);
+            }, "yell.com", searchLocation)) {
               found++;
             }
           }
           if (Array.isArray(data.itemListElement)) {
             for (const item of data.itemListElement) {
               if (item.item?.name) {
-                businesses.push(createBusiness({
+                if (addBusiness(businesses, {
                   name: item.item.name,
                   address: item.item.address?.streetAddress || "",
                   postcode: item.item.address?.postalCode || "",
                   phone: item.item.telephone || "",
                   website: item.item.url || "",
                   industry: query,
-                }, "yell.com", searchLocation));
-                found++;
+                }, "yell.com", searchLocation)) {
+                  found++;
+                }
               }
             }
           }
@@ -293,10 +388,11 @@ async function scrapeYell(query: string, location: string, maxPages: number, sea
         const reviewMatch = listing.match(/\((\d+)\s*review/i);
         const review_count = reviewMatch ? reviewMatch[1] : "";
 
-        businesses.push(createBusiness({
+        if (addBusiness(businesses, {
           name, address, phone, website, industry, rating, review_count, postcode,
-        }, "yell.com", searchLocation));
-        found++;
+        }, "yell.com", searchLocation)) {
+          found++;
+        }
       }
 
       // Pattern 3: Direct href to /biz/ pages (fallback)
@@ -305,8 +401,9 @@ async function scrapeYell(query: string, location: string, maxPages: number, sea
         for (const match of Array.from(bizMatches)) {
           const name = cleanText(match[2]);
           if (name && name.length > 2 && !name.toLowerCase().includes('yell') && !name.toLowerCase().includes('more info')) {
-            businesses.push(createBusiness({ name, industry: query, address: location }, "yell.com", searchLocation));
-            found++;
+            if (addBusiness(businesses, { name, industry: query, address: location }, "yell.com", searchLocation)) {
+              found++;
+            }
           }
         }
       }
@@ -358,11 +455,12 @@ async function scrapeScoot(query: string, location: string, maxPages: number, se
         const phoneMatch = listing.match(/href="tel:([^"]+)"/i);
         const phone = phoneMatch ? cleanText(phoneMatch[1]) : extractPhone(listing);
 
-        businesses.push(createBusiness({
+        if (addBusiness(businesses, {
           name, address, phone, industry: query,
           postcode: extractPostcode(address),
-        }, "scoot", searchLocation));
-        found++;
+        }, "scoot", searchLocation)) {
+          found++;
+        }
       }
 
       // Fallback: any links with business-looking URLs
@@ -371,8 +469,9 @@ async function scrapeScoot(query: string, location: string, maxPages: number, se
         for (const match of Array.from(linkMatches)) {
           const name = cleanText(match[2]);
           if (name && name.length > 3 && !name.toLowerCase().includes('scoot') && !name.toLowerCase().includes('page')) {
-            businesses.push(createBusiness({ name, industry: query, address: location }, "scoot", searchLocation));
-            found++;
+            if (addBusiness(businesses, { name, industry: query, address: location }, "scoot", searchLocation)) {
+              found++;
+            }
             if (found >= 20) break;
           }
         }
@@ -422,11 +521,12 @@ async function scrapeThomson(query: string, location: string, maxPages: number, 
         const addressMatch = listing.match(/class="[^"]*address[^"]*"[^>]*>([^<]+)/i);
         const address = addressMatch ? cleanText(addressMatch[1]) : location;
 
-        businesses.push(createBusiness({
+        if (addBusiness(businesses, {
           name, address, phone, industry: query,
           postcode: extractPostcode(address),
-        }, "thomson", searchLocation));
-        found++;
+        }, "thomson", searchLocation)) {
+          found++;
+        }
       }
 
       // Fallback
@@ -435,8 +535,9 @@ async function scrapeThomson(query: string, location: string, maxPages: number, 
         for (const match of Array.from(nameMatches)) {
           const name = cleanText(match[1]);
           if (name && name.length > 2 && !name.toLowerCase().includes('thomson')) {
-            businesses.push(createBusiness({ name, industry: query, address: location }, "thomson", searchLocation));
-            found++;
+            if (addBusiness(businesses, { name, industry: query, address: location }, "thomson", searchLocation)) {
+              found++;
+            }
           }
         }
       }
@@ -478,7 +579,7 @@ async function scrapeYelp(query: string, location: string, maxPages: number, sea
           if (data.itemListElement) {
             for (const item of data.itemListElement) {
               if (item.item?.name) {
-                businesses.push(createBusiness({
+                if (addBusiness(businesses, {
                   name: item.item.name,
                   address: item.item.address?.streetAddress || location,
                   postcode: item.item.address?.postalCode || "",
@@ -486,8 +587,9 @@ async function scrapeYelp(query: string, location: string, maxPages: number, sea
                   review_count: item.item.aggregateRating?.reviewCount?.toString() || "",
                   website: item.item.url || "",
                   industry: query,
-                }, "yelp", searchLocation));
-                found++;
+                }, "yelp", searchLocation)) {
+                  found++;
+                }
               }
             }
           }
@@ -500,8 +602,9 @@ async function scrapeYelp(query: string, location: string, maxPages: number, sea
         for (const match of Array.from(bizMatches)) {
           const name = cleanText(match[2]);
           if (name && name.length > 2 && !name.toLowerCase().includes('yelp') && !businesses.some(b => b.name === name)) {
-            businesses.push(createBusiness({ name, industry: query, address: location }, "yelp", searchLocation));
-            found++;
+            if (addBusiness(businesses, { name, industry: query, address: location }, "yelp", searchLocation)) {
+              found++;
+            }
           }
         }
       }
@@ -539,8 +642,9 @@ async function scrapeFreeIndex(query: string, location: string, maxPages: number
       for (const match of Array.from(profileMatches)) {
         const name = cleanText(match[2]);
         if (name && name.length > 2 && !businesses.some(b => b.name === name)) {
-          businesses.push(createBusiness({ name, industry: query, address: location }, "freeindex", searchLocation));
-          found++;
+          if (addBusiness(businesses, { name, industry: query, address: location }, "freeindex", searchLocation)) {
+            found++;
+          }
         }
       }
 
@@ -556,8 +660,9 @@ async function scrapeFreeIndex(query: string, location: string, maxPages: number
           const phoneMatch = listing.match(/href="tel:([^"]+)"/i);
           const phone = phoneMatch ? cleanText(phoneMatch[1]) : extractPhone(listing);
 
-          businesses.push(createBusiness({ name, phone, industry: query, address: location }, "freeindex", searchLocation));
-          found++;
+          if (addBusiness(businesses, { name, phone, industry: query, address: location }, "freeindex", searchLocation)) {
+            found++;
+          }
         }
       }
 
@@ -594,8 +699,9 @@ async function scrapeCheckatrade(query: string, location: string, maxPages: numb
       for (const match of Array.from(tradeMatches)) {
         const name = cleanText(match[2]);
         if (name && name.length > 2 && !businesses.some(b => b.name === name)) {
-          businesses.push(createBusiness({ name, industry: query, address: location }, "checkatrade", searchLocation));
-          found++;
+          if (addBusiness(businesses, { name, industry: query, address: location }, "checkatrade", searchLocation)) {
+            found++;
+          }
         }
       }
 
@@ -615,10 +721,11 @@ async function scrapeCheckatrade(query: string, location: string, maxPages: numb
           const reviewMatch = card.match(/(\d+)\s*review/i);
           const review_count = reviewMatch ? reviewMatch[1] : "";
 
-          businesses.push(createBusiness({
+          if (addBusiness(businesses, {
             name, rating, review_count, industry: query, address: location,
-          }, "checkatrade", searchLocation));
-          found++;
+          }, "checkatrade", searchLocation)) {
+            found++;
+          }
         }
       }
 
@@ -657,12 +764,13 @@ async function scrapeTrustpilot(query: string, location: string, maxPages: numbe
         const name = cleanText(match[2]);
         const domain = match[1];
         if (name && name.length > 2 && !name.toLowerCase().includes('trustpilot') && !businesses.some(b => b.name === name)) {
-          businesses.push(createBusiness({
+          if (addBusiness(businesses, {
             name,
             website: domain.includes('.') ? `https://${domain}` : "",
             industry: query,
-          }, "trustpilot", searchLocation));
-          found++;
+          }, "trustpilot", searchLocation)) {
+            found++;
+          }
         }
       }
 
@@ -672,14 +780,15 @@ async function scrapeTrustpilot(query: string, location: string, maxPages: numbe
         try {
           const data = JSON.parse(match[1]);
           if (data.displayName && !businesses.some(b => b.name === data.displayName)) {
-            businesses.push(createBusiness({
+            if (addBusiness(businesses, {
               name: data.displayName,
               website: data.websiteUrl || "",
               rating: data.trustScore?.toString() || "",
               review_count: data.numberOfReviews?.toString() || "",
               industry: query,
-            }, "trustpilot", searchLocation));
-            found++;
+            }, "trustpilot", searchLocation)) {
+              found++;
+            }
           }
         } catch {}
       }
@@ -753,7 +862,7 @@ async function scrapeGoogle(query: string, location: string, maxPages: number, s
             const fullAddressMatch = context.match(/(?:Address|Located at|at)\s*:?\s*([^<]{10,80})/i);
             const address = fullAddressMatch ? cleanText(fullAddressMatch[1]) : location;
 
-            businesses.push(createBusiness({
+            addBusiness(businesses, {
               name,
               rating: ratingMatch ? ratingMatch[1] : "",
               review_count: ratingMatch ? ratingMatch[2] : "",
@@ -761,7 +870,7 @@ async function scrapeGoogle(query: string, location: string, maxPages: number, s
               industry: query,
               address,
               postcode,
-            }, "google", searchLocation));
+            }, "google", searchLocation);
           }
         }
       }
@@ -809,11 +918,12 @@ async function scrape118(query: string, location: string, maxPages: number, sear
         const addressMatch = listing.match(/class="[^"]*address[^"]*"[^>]*>([^<]+)/i);
         const address = addressMatch ? cleanText(addressMatch[1]) : location;
 
-        businesses.push(createBusiness({
+        if (addBusiness(businesses, {
           name, phone, address, industry: query,
           postcode: extractPostcode(address),
-        }, "118118", searchLocation));
-        found++;
+        }, "118118", searchLocation)) {
+          found++;
+        }
       }
 
       console.log(`[118118] Page ${page}: found ${found} businesses`);
@@ -853,8 +963,9 @@ async function scrapeBark(query: string, location: string, maxPages: number, sea
       for (const match of Array.from(proMatches)) {
         const name = cleanText(match[2]);
         if (name && name.length > 2 && !businesses.some(b => b.name === name)) {
-          businesses.push(createBusiness({ name, industry: query, address: location }, "bark", searchLocation));
-          found++;
+          if (addBusiness(businesses, { name, industry: query, address: location }, "bark", searchLocation)) {
+            found++;
+          }
         }
       }
 
@@ -870,10 +981,11 @@ async function scrapeBark(query: string, location: string, maxPages: number, sea
           const ratingMatch = card.match(/(\d+\.?\d*)\s*star/i);
           const rating = ratingMatch ? ratingMatch[1] : "";
 
-          businesses.push(createBusiness({
+          if (addBusiness(businesses, {
             name, rating, industry: query, address: location,
-          }, "bark", searchLocation));
-          found++;
+          }, "bark", searchLocation)) {
+            found++;
+          }
         }
       }
 
@@ -891,6 +1003,164 @@ async function scrapeBark(query: string, location: string, maxPages: number, sea
 }
 
 // ============================================================================
+// WEBSITE EMAIL ENRICHMENT - Crawl business websites to find emails
+// ============================================================================
+async function enrichBusinessWithEmail(business: Business): Promise<Business> {
+  if (business.email || !business.website) {
+    return business;
+  }
+
+  try {
+    // Normalize website URL
+    let websiteUrl = business.website;
+    if (!websiteUrl.startsWith('http')) {
+      websiteUrl = `https://${websiteUrl}`;
+    }
+
+    console.log(`[Enrich] Fetching ${websiteUrl} for ${business.name}`);
+    const response = await fetch(websiteUrl, {
+      headers: HEADERS,
+      redirect: 'follow',
+    });
+
+    if (!response.ok) {
+      return business;
+    }
+
+    const html = await response.text();
+
+    // Extract email from website
+    const emailPatterns = [
+      // Mailto links
+      /href="mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})"/gi,
+      // Email patterns in text
+      /\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(?:co\.uk|com|org|net|uk|io))\b/gi,
+      // Contact email patterns
+      /(?:email|contact|info|enquir|support|sales|hello|admin)[@:]\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi,
+    ];
+
+    let foundEmail = "";
+    for (const pattern of emailPatterns) {
+      const matches = html.matchAll(pattern);
+      for (const match of Array.from(matches)) {
+        const email = (match[1] || match[0]).toLowerCase().trim();
+        // Filter out common non-business emails
+        if (email &&
+            !email.includes('example.com') &&
+            !email.includes('test.com') &&
+            !email.includes('noreply') &&
+            !email.includes('wixpress') &&
+            !email.includes('sentry') &&
+            !email.includes('protection') &&
+            email.includes('@')) {
+          foundEmail = email;
+          break;
+        }
+      }
+      if (foundEmail) break;
+    }
+
+    // Extract phone if not present
+    let phone = business.phone;
+    if (!phone) {
+      const phoneMatch = extractPhone(html);
+      if (phoneMatch) {
+        phone = phoneMatch;
+      }
+    }
+
+    // Extract description/about text
+    let description = business.description;
+    if (!description) {
+      const descPatterns = [
+        /<meta[^>]*name="description"[^>]*content="([^"]+)"/i,
+        /<meta[^>]*property="og:description"[^>]*content="([^"]+)"/i,
+        /<p[^>]*class="[^"]*(?:about|description|intro)[^"]*"[^>]*>([^<]{20,200})<\/p>/i,
+      ];
+      for (const pattern of descPatterns) {
+        const match = html.match(pattern);
+        if (match) {
+          description = cleanText(match[1]).substring(0, 200);
+          break;
+        }
+      }
+    }
+
+    // Extract address if not present
+    let address = business.address;
+    let postcode = business.postcode;
+    if (!address || address === business.industry) {
+      const addressPatterns = [
+        /(?:address|location|find us)[^<]*?([^<]*[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}[^<]*)/i,
+        /<address[^>]*>([\s\S]*?)<\/address>/i,
+      ];
+      for (const pattern of addressPatterns) {
+        const match = html.match(pattern);
+        if (match) {
+          const extracted = cleanText(match[1]);
+          if (extracted.length > 10 && extracted.length < 150) {
+            address = extracted;
+            postcode = extractPostcode(address) || postcode;
+            break;
+          }
+        }
+      }
+    }
+
+    if (foundEmail || description || (phone && !business.phone)) {
+      console.log(`[Enrich] Found for ${business.name}: email=${foundEmail}, desc=${description?.substring(0, 30)}...`);
+    }
+
+    return {
+      ...business,
+      email: foundEmail || business.email,
+      phone: phone || business.phone,
+      description: description || business.description,
+      address: address || business.address,
+      postcode: postcode || business.postcode,
+    };
+  } catch (error) {
+    console.log(`[Enrich] Failed for ${business.name}:`, error);
+    return business;
+  }
+}
+
+// Enrich multiple businesses in parallel (with rate limiting)
+async function enrichBusinesses(businesses: Business[], maxEnrich: number = 20): Promise<Business[]> {
+  // Only enrich businesses with websites but no email
+  const toEnrich = businesses
+    .filter(b => b.website && !b.email)
+    .slice(0, maxEnrich);
+
+  if (toEnrich.length === 0) {
+    return businesses;
+  }
+
+  console.log(`[Enrich] Enriching ${toEnrich.length} businesses...`);
+
+  // Process in batches of 5 to avoid overwhelming servers
+  const batchSize = 5;
+  const enrichedMap = new Map<string, Business>();
+
+  for (let i = 0; i < toEnrich.length; i += batchSize) {
+    const batch = toEnrich.slice(i, i + batchSize);
+    const enrichedBatch = await Promise.all(
+      batch.map(b => enrichBusinessWithEmail(b).catch(() => b))
+    );
+    for (const enriched of enrichedBatch) {
+      enrichedMap.set(enriched.name, enriched);
+    }
+    // Small delay between batches
+    if (i + batchSize < toEnrich.length) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+
+  // Merge enriched data back
+  return businesses.map(b => enrichedMap.get(b.name) || b);
+}
+
+// ============================================================================
 // MAIN API HANDLER
 // ============================================================================
 export async function POST(request: NextRequest) {
@@ -898,7 +1168,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { query, location, sources = ["yell", "freeindex", "thomson", "google"], max_pages = 5 } = body;
+    const { query, location, sources = ["yell", "freeindex", "thomson", "google"], max_pages = 5, enrich_emails = true } = body;
 
     if (!query || !location) {
       return NextResponse.json({ error: "Missing query or location" }, { status: 400 });
@@ -958,14 +1228,21 @@ export async function POST(request: NextRequest) {
     // Sort by lead score
     uniqueBusinesses.sort((a, b) => b.lead_score - a.lead_score);
 
+    // Enrich businesses with emails from their websites
+    let finalBusinesses = uniqueBusinesses;
+    if (enrich_emails && uniqueBusinesses.length > 0) {
+      console.log(`\nEnriching top businesses with email/description...`);
+      finalBusinesses = await enrichBusinesses(uniqueBusinesses, 15);
+    }
+
     const elapsed = Date.now() - startTime;
-    console.log(`Unique businesses: ${uniqueBusinesses.length}`);
+    console.log(`Unique businesses: ${finalBusinesses.length}`);
     console.log(`Time: ${elapsed}ms`);
     console.log(`================================\n`);
 
     return NextResponse.json({
-      businesses: uniqueBusinesses,
-      count: uniqueBusinesses.length,
+      businesses: finalBusinesses,
+      count: finalBusinesses.length,
       query,
       location,
       sources,

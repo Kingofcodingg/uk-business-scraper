@@ -202,12 +202,15 @@ const DATA_SOURCES = [
   { id: "118", name: "118118", description: "UK Directory" },
 ];
 
+// All available data sources - always search all
+const ALL_SOURCES = DATA_SOURCES.map(s => s.id);
+
 export default function Home() {
   const [searchParams, setSearchParams] = useState<SearchParams>({
     query: "",
     postcode: "",
     radius: "10",
-    sources: ["yell", "checkatrade", "freeindex", "trustpilot"],
+    sources: ALL_SOURCES, // Always use all sources
     maxPages: 5,
   });
   const [customQuery, setCustomQuery] = useState("");
@@ -215,15 +218,6 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [searchComplete, setSearchComplete] = useState(false);
-
-  const handleSourceToggle = (sourceId: string) => {
-    setSearchParams((prev) => ({
-      ...prev,
-      sources: prev.sources.includes(sourceId)
-        ? prev.sources.filter((s) => s !== sourceId)
-        : [...prev.sources, sourceId],
-    }));
-  };
 
   const handleSearch = async () => {
     const query = customQuery || searchParams.query;
@@ -233,10 +227,6 @@ export default function Home() {
     }
     if (!searchParams.postcode) {
       setError("Please enter a postcode or location");
-      return;
-    }
-    if (searchParams.sources.length === 0) {
-      setError("Please select at least one data source");
       return;
     }
 
@@ -253,8 +243,9 @@ export default function Home() {
           query,
           location: searchParams.postcode,
           radius: searchParams.radius,
-          sources: searchParams.sources,
+          sources: ALL_SOURCES, // Always use all sources
           max_pages: searchParams.maxPages,
+          enrich_emails: true, // Request email enrichment
         }),
       });
 
@@ -421,32 +412,12 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Data Sources */}
-        <div className="mt-6">
-          <label className="block text-sm font-medium text-gray-700 mb-3">
-            Data Sources
-          </label>
-          <div className="grid grid-cols-3 md:grid-cols-5 lg:grid-cols-9 gap-2">
-            {DATA_SOURCES.map((source) => (
-              <label
-                key={source.id}
-                className={`flex flex-col items-center p-3 rounded-lg border-2 cursor-pointer transition-all ${
-                  searchParams.sources.includes(source.id)
-                    ? "border-blue-500 bg-blue-50"
-                    : "border-gray-200 hover:border-gray-300"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={searchParams.sources.includes(source.id)}
-                  onChange={() => handleSourceToggle(source.id)}
-                  className="sr-only"
-                />
-                <span className="font-medium text-sm">{source.name}</span>
-                <span className="text-xs text-gray-500">{source.description}</span>
-              </label>
-            ))}
-          </div>
+        {/* Data Sources Info */}
+        <div className="mt-6 p-3 bg-blue-50 rounded-lg">
+          <p className="text-sm text-blue-800">
+            <strong>Searching {DATA_SOURCES.length} sources:</strong>{" "}
+            {DATA_SOURCES.map(s => s.name).join(", ")}
+          </p>
         </div>
 
         {/* Max Pages */}
