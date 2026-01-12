@@ -14,6 +14,8 @@ interface Business {
   rating: string;
   review_count: string;
   source: string;
+  lead_score: number;
+  lead_signals: string[];
 }
 
 interface SearchParams {
@@ -269,6 +271,8 @@ export default function Home() {
 
     const headers = [
       "Name",
+      "Lead Score",
+      "Lead Signals",
       "Email",
       "Phone",
       "Website",
@@ -283,6 +287,8 @@ export default function Home() {
       ...results.map((b) =>
         [
           `"${b.name}"`,
+          `"${b.lead_score}"`,
+          `"${(b.lead_signals || []).join("; ")}"`,
           `"${b.email}"`,
           `"${b.phone}"`,
           `"${b.website}"`,
@@ -530,13 +536,32 @@ export default function Home() {
               {results.map((business, index) => (
                 <div
                   key={index}
-                  className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                  className={`border-2 rounded-lg p-4 hover:shadow-md transition-shadow ${
+                    business.lead_score >= 80
+                      ? "border-green-500 bg-green-50"
+                      : business.lead_score >= 60
+                      ? "border-yellow-500 bg-yellow-50"
+                      : "border-gray-200"
+                  }`}
                 >
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
-                      <h3 className="font-semibold text-lg text-gray-900">
-                        {business.name}
-                      </h3>
+                      <div className="flex items-center gap-3">
+                        <h3 className="font-semibold text-lg text-gray-900">
+                          {business.name}
+                        </h3>
+                        <span
+                          className={`px-2 py-1 rounded-full text-xs font-bold ${
+                            business.lead_score >= 80
+                              ? "bg-green-600 text-white"
+                              : business.lead_score >= 60
+                              ? "bg-yellow-500 text-white"
+                              : "bg-gray-400 text-white"
+                          }`}
+                        >
+                          {business.lead_score}% Match
+                        </span>
+                      </div>
                       {business.industry && (
                         <p className="text-sm text-blue-600">{business.industry}</p>
                       )}
@@ -545,6 +570,20 @@ export default function Home() {
                       {business.source}
                     </span>
                   </div>
+
+                  {/* Lead Signals */}
+                  {business.lead_signals && business.lead_signals.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {business.lead_signals.map((signal, i) => (
+                        <span
+                          key={i}
+                          className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded"
+                        >
+                          {signal}
+                        </span>
+                      ))}
+                    </div>
+                  )}
 
                   <div className="mt-3 grid md:grid-cols-2 gap-2 text-sm text-gray-600">
                     {business.address && (

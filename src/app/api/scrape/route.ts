@@ -13,6 +13,93 @@ interface Business {
   review_count: string;
   source: string;
   scraped_at: string;
+  // Lead scoring fields
+  lead_score: number;
+  lead_signals: string[];
+}
+
+// Calculate lead score - higher score = more likely to need marketing/tech services
+function calculateLeadScore(business: Omit<Business, 'lead_score' | 'lead_signals'>): { score: number; signals: string[] } {
+  let score = 50; // Base score
+  const signals: string[] = [];
+
+  // No website = needs web development (HIGH priority)
+  if (!business.website) {
+    score += 25;
+    signals.push("No website - needs web presence");
+  }
+
+  // No email = needs digital setup
+  if (!business.email) {
+    score += 15;
+    signals.push("No email listed - limited digital presence");
+  }
+
+  // No phone = very limited online presence
+  if (!business.phone) {
+    score += 10;
+    signals.push("No phone listed - minimal online info");
+  }
+
+  // Low or no rating = needs reputation management
+  if (!business.rating) {
+    score += 15;
+    signals.push("No reviews - needs reputation building");
+  } else {
+    const ratingNum = parseFloat(business.rating);
+    if (ratingNum < 3.5) {
+      score += 20;
+      signals.push("Low rating - needs reputation management");
+    } else if (ratingNum < 4.0) {
+      score += 10;
+      signals.push("Average rating - room for improvement");
+    }
+  }
+
+  // Low review count = needs visibility
+  if (business.review_count) {
+    const reviewCount = parseInt(business.review_count);
+    if (reviewCount < 5) {
+      score += 15;
+      signals.push("Few reviews - needs marketing visibility");
+    } else if (reviewCount < 20) {
+      score += 8;
+      signals.push("Limited reviews - could use more exposure");
+    }
+  } else {
+    score += 10;
+    signals.push("No review count - low online engagement");
+  }
+
+  // Traditional industries that often need modernization
+  const traditionalIndustries = [
+    'plumber', 'electrician', 'builder', 'roofer', 'painter',
+    'garage', 'locksmith', 'carpenter', 'landscaping', 'cleaning',
+    'farm', 'manufacturer', 'wholesaler', 'distributor'
+  ];
+
+  const industryLower = business.industry.toLowerCase();
+  if (traditionalIndustries.some(ind => industryLower.includes(ind))) {
+    score += 10;
+    signals.push("Traditional industry - likely needs digital modernization");
+  }
+
+  // High-value industries (can afford services)
+  const highValueIndustries = [
+    'solicitor', 'accountant', 'architect', 'surveyor', 'dentist',
+    'private hospital', 'medical', 'yacht', 'boat', 'marina',
+    'hotel', 'property developer', 'investment', 'private equity'
+  ];
+
+  if (highValueIndustries.some(ind => industryLower.includes(ind))) {
+    score += 5;
+    signals.push("High-value industry - budget for services");
+  }
+
+  // Cap score at 100
+  score = Math.min(score, 100);
+
+  return { score, signals };
 }
 
 // Extract UK postcode from text
@@ -114,7 +201,7 @@ async function scrapeYell(
           );
           const rating = ratingMatch ? cleanText(ratingMatch[1]) : "";
 
-          businesses.push({
+          const baseBusiness = {
             name,
             email: "",
             phone,
@@ -127,6 +214,12 @@ async function scrapeYell(
             review_count: "",
             source: "yell.com",
             scraped_at: new Date().toISOString(),
+          };
+          const { score, signals } = calculateLeadScore(baseBusiness);
+          businesses.push({
+            ...baseBusiness,
+            lead_score: score,
+            lead_signals: signals,
           });
         } catch {
           continue;
@@ -193,7 +286,7 @@ async function scrapeFreeIndex(
           );
           const industry = categoryMatch ? cleanText(categoryMatch[1]) : "";
 
-          businesses.push({
+          const baseBusiness = {
             name,
             email: "",
             phone: "",
@@ -206,6 +299,12 @@ async function scrapeFreeIndex(
             review_count: "",
             source: "freeindex",
             scraped_at: new Date().toISOString(),
+          };
+          const { score, signals } = calculateLeadScore(baseBusiness);
+          businesses.push({
+            ...baseBusiness,
+            lead_score: score,
+            lead_signals: signals,
           });
         } catch {
           continue;
@@ -255,7 +354,7 @@ async function scrapeThomson(
 
         if (!name) continue;
 
-        businesses.push({
+        const baseBusiness = {
           name,
           email: "",
           phone: "",
@@ -268,6 +367,12 @@ async function scrapeThomson(
           review_count: "",
           source: "thomson_local",
           scraped_at: new Date().toISOString(),
+        };
+        const { score, signals } = calculateLeadScore(baseBusiness);
+        businesses.push({
+          ...baseBusiness,
+          lead_score: score,
+          lead_signals: signals,
         });
       }
 
@@ -323,6 +428,9 @@ export async function POST(request: NextRequest) {
       }
       return false;
     });
+
+    // Sort by lead score (highest first)
+    uniqueBusinesses.sort((a, b) => b.lead_score - a.lead_score);
 
     return NextResponse.json({
       businesses: uniqueBusinesses,
