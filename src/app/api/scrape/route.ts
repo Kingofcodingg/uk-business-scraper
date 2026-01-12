@@ -981,6 +981,260 @@ async function scrapeTrustpilot(query: string, location: string, maxPages: numbe
 }
 
 // ============================================================================
+// BING LOCAL SEARCH - Primary search engine for UK businesses
+// ============================================================================
+async function scrapeBing(query: string, location: string, maxPages: number): Promise<Business[]> {
+  const businesses: Business[] = [];
+  console.log(`[Bing] Starting scrape: ${query} in ${location}`);
+
+  const searchQueries = [
+    `${query} ${location} UK`,
+    `${query} near ${location}`,
+    `${query} in ${location} business`,
+  ];
+
+  for (let i = 0; i < Math.min(maxPages, searchQueries.length); i++) {
+    try {
+      const url = `https://www.bing.com/search?q=${encodeURIComponent(searchQueries[i])}&setlang=en-GB&cc=GB`;
+      console.log(`[Bing] Searching: ${searchQueries[i]}`);
+
+      const response = await fetch(url, {
+        headers: {
+          ...HEADERS,
+          "Accept-Language": "en-GB,en;q=0.9",
+        },
+        redirect: 'follow',
+      });
+
+      if (!response.ok) {
+        console.log(`[Bing] Response failed: ${response.status}`);
+        continue;
+      }
+
+      const html = await response.text();
+      console.log(`[Bing] Got ${html.length} bytes`);
+
+      // Pattern 1: Local Pack results (Bing Places)
+      const localPackMatches = html.matchAll(/<div[^>]*class="[^"]*(?:b_localEntityCard|lc_content|b_entityTP)[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi);
+      for (const match of Array.from(localPackMatches)) {
+        const card = match[0];
+        const nameMatch = card.match(/<(?:h2|a)[^>]*>([^<]{3,60})<\/(?:h2|a)>/i) ||
+                         card.match(/title="([^"]{3,60})"/i);
+        if (!nameMatch) continue;
+
+        const name = cleanText(nameMatch[1]);
+        if (!isValidBusinessName(name)) continue;
+        if (businesses.some(b => b.name.toLowerCase() === name.toLowerCase())) continue;
+
+        // Extract address
+        const addressMatch = card.match(/(?:class="[^"]*(?:addr|address|lc_addEnt)[^"]*"[^>]*>|<span[^>]*>)([^<]*(?:[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})[^<]*)/i);
+        const address = addressMatch ? cleanText(addressMatch[1]) : location;
+
+        // Extract phone
+        const phoneMatch = card.match(/href="tel:([^"]+)"/i) ||
+                          card.match(/(\b0[1-9]\d{2,3}[\s.-]?\d{3}[\s.-]?\d{3,4}\b)/);
+        const phone = phoneMatch ? cleanText(phoneMatch[1]) : "";
+
+        // Extract rating
+        const ratingMatch = card.match(/(\d+\.?\d*)\s*(?:\/\s*5|star|rating)/i);
+        const rating = ratingMatch ? ratingMatch[1] : "";
+
+        // Extract review count
+        const reviewMatch = card.match(/\((\d+)\s*(?:review|rating)/i) ||
+                           card.match(/(\d+)\s*review/i);
+        const review_count = reviewMatch ? reviewMatch[1] : "";
+
+        // Extract website
+        const websiteMatch = card.match(/href="(https?:\/\/(?!www\.bing|www\.microsoft)[a-z0-9.-]+\.[a-z]{2,}[^"]*)"[^>]*>/i);
+        const website = websiteMatch ? websiteMatch[1].split('?')[0] : "";
+
+        addBusiness(businesses, {
+          name,
+          address,
+          phone,
+          rating,
+          review_count,
+          website,
+          industry: query,
+          postcode: extractPostcode(address),
+        }, "bing");
+      }
+
+      // Pattern 2: Organic search results with business info
+      const organicMatches = html.matchAll(/<li[^>]*class="[^"]*b_algo[^"]*"[^>]*>([\s\S]*?)<\/li>/gi);
+      for (const match of Array.from(organicMatches)) {
+        const result = match[0];
+
+        // Get the title/link
+        const titleMatch = result.match(/<h2[^>]*>[\s\S]*?<a[^>]*href="([^"]*)"[^>]*>([^<]+)/i);
+        if (!titleMatch) continue;
+
+        const url = titleMatch[1];
+        let name = cleanText(titleMatch[2]);
+
+        // Skip if it's a directory site
+        const skipDomains = ['yell.com', 'yelp.', 'trustpilot.', 'facebook.com', 'linkedin.com',
+                           'twitter.com', 'instagram.com', 'youtube.com', 'wikipedia.',
+                           'freeindex.', 'checkatrade.', 'bark.com', 'scoot.', 'thomsonlocal.',
+                           '118118.', 'cylex.', 'hotfrog.', 'businesslist.', 'bing.com'];
+        if (skipDomains.some(skip => url.toLowerCase().includes(skip))) continue;
+
+        // Clean up the name - remove common suffixes
+        name = name.replace(/\s*[-|–]\s*(?:Home|About|Contact|Services|Reviews|Official Site).*$/i, '').trim();
+
+        if (!isValidBusinessName(name)) continue;
+        if (name.length < 3 || name.length > 80) continue;
+        if (businesses.some(b => b.name.toLowerCase() === name.toLowerCase())) continue;
+
+        // Check if it looks like a business result (has location mention or UK domain)
+        const snippet = result.match(/<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
+        const snippetText = snippet ? cleanText(snippet[1]) : "";
+
+        // Extract postcode from snippet
+        const postcode = extractPostcode(snippetText) || extractPostcode(url);
+
+        // Extract phone from snippet
+        const phone = extractPhone(snippetText);
+
+        // Check if this looks like a business in the location
+        const locationLower = location.toLowerCase();
+        const isRelevant = snippetText.toLowerCase().includes(locationLower) ||
+                          url.toLowerCase().includes('.co.uk') ||
+                          postcode !== "";
+
+        if (isRelevant || phone) {
+          addBusiness(businesses, {
+            name,
+            website: url.startsWith('http') ? url.split('?')[0] : "",
+            phone,
+            postcode,
+            industry: query,
+            address: postcode ? `${location}, ${postcode}` : location,
+            description: snippetText.substring(0, 200),
+          }, "bing");
+        }
+      }
+
+      // Pattern 3: Bing Maps/Local results
+      const mapsMatches = html.matchAll(/data-bm="([^"]+)"/gi);
+      for (const match of Array.from(mapsMatches)) {
+        try {
+          const data = JSON.parse(decodeURIComponent(match[1]));
+          if (data.name && !businesses.some(b => b.name.toLowerCase() === data.name.toLowerCase())) {
+            addBusiness(businesses, {
+              name: data.name,
+              address: data.address || location,
+              phone: data.phone || "",
+              website: data.url || "",
+              rating: data.rating?.toString() || "",
+              industry: query,
+              postcode: extractPostcode(data.address || ""),
+            }, "bing");
+          }
+        } catch {}
+      }
+
+      console.log(`[Bing] Found ${businesses.length} businesses so far`);
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } catch (error) {
+      console.log(`[Bing] Error:`, error);
+    }
+  }
+
+  console.log(`[Bing] Total: ${businesses.length} businesses`);
+  return businesses;
+}
+
+// ============================================================================
+// DUCKDUCKGO LOCAL SEARCH - Privacy-friendly search backup
+// ============================================================================
+async function scrapeDuckDuckGo(query: string, location: string, maxPages: number): Promise<Business[]> {
+  const businesses: Business[] = [];
+  console.log(`[DuckDuckGo] Starting scrape: ${query} in ${location}`);
+
+  const searchQueries = [
+    `${query} ${location} UK`,
+    `${query} near ${location}`,
+  ];
+
+  for (let i = 0; i < Math.min(maxPages, searchQueries.length); i++) {
+    try {
+      const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(searchQueries[i])}&kl=uk-en`;
+      console.log(`[DuckDuckGo] Searching: ${searchQueries[i]}`);
+
+      const response = await fetch(url, {
+        headers: {
+          ...HEADERS,
+          "Accept": "text/html",
+        },
+        redirect: 'follow',
+      });
+
+      if (!response.ok) {
+        console.log(`[DuckDuckGo] Response failed: ${response.status}`);
+        continue;
+      }
+
+      const html = await response.text();
+      console.log(`[DuckDuckGo] Got ${html.length} bytes`);
+
+      // Pattern: Search results
+      const resultMatches = html.matchAll(/<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]*)"[^>]*>([^<]+)<\/a>/gi);
+      for (const match of Array.from(resultMatches)) {
+        const url = match[1];
+        let name = cleanText(match[2]);
+
+        // Skip directory sites
+        const skipDomains = ['yell.com', 'yelp.', 'trustpilot.', 'facebook.com', 'linkedin.com',
+                           'twitter.com', 'instagram.com', 'youtube.com', 'wikipedia.',
+                           'freeindex.', 'checkatrade.', 'bark.com', 'duckduckgo.'];
+        if (skipDomains.some(skip => url.toLowerCase().includes(skip))) continue;
+
+        // Clean up name
+        name = name.replace(/\s*[-|–]\s*(?:Home|About|Contact|Services|Reviews|Official Site).*$/i, '').trim();
+
+        if (!isValidBusinessName(name)) continue;
+        if (name.length < 3 || name.length > 80) continue;
+        if (businesses.some(b => b.name.toLowerCase() === name.toLowerCase())) continue;
+
+        // Get snippet
+        const snippetMatch = html.match(new RegExp(`<a[^>]*>${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}</a>[\\s\\S]*?<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([\\s\\S]*?)</a>`, 'i'));
+        const snippetText = snippetMatch ? cleanText(snippetMatch[1]) : "";
+
+        const postcode = extractPostcode(snippetText) || extractPostcode(url);
+        const phone = extractPhone(snippetText);
+
+        // Check relevance
+        const locationLower = location.toLowerCase();
+        const isRelevant = snippetText.toLowerCase().includes(locationLower) ||
+                          url.toLowerCase().includes('.co.uk') ||
+                          postcode !== "";
+
+        if (isRelevant || phone) {
+          addBusiness(businesses, {
+            name,
+            website: url.startsWith('http') ? url.split('?')[0] : "",
+            phone,
+            postcode,
+            industry: query,
+            address: postcode ? `${location}, ${postcode}` : location,
+            description: snippetText.substring(0, 200),
+          }, "duckduckgo");
+        }
+      }
+
+      console.log(`[DuckDuckGo] Found ${businesses.length} businesses so far`);
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } catch (error) {
+      console.log(`[DuckDuckGo] Error:`, error);
+    }
+  }
+
+  console.log(`[DuckDuckGo] Total: ${businesses.length} businesses`);
+  return businesses;
+}
+
+// ============================================================================
 // GOOGLE LOCAL SEARCH - Enhanced with website discovery
 // ============================================================================
 async function scrapeGoogle(query: string, location: string, maxPages: number): Promise<Business[]> {
@@ -1871,7 +2125,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { query, location, sources = ["yell", "freeindex", "thomson", "google"], max_pages = 5, enrich_emails = true } = body;
+    const { query, location, sources = ["bing", "duckduckgo", "yell", "freeindex", "thomson"], max_pages = 5, enrich_emails = true } = body;
 
     if (!query || !location) {
       return NextResponse.json({ error: "Missing query or location" }, { status: 400 });
@@ -1886,6 +2140,8 @@ export async function POST(request: NextRequest) {
     const searchLocation = location; // Save for distance calculation
 
     const scraperMap: Record<string, (q: string, l: string, p: number) => Promise<Business[]>> = {
+      bing: scrapeBing,
+      duckduckgo: scrapeDuckDuckGo,
       yell: scrapeYell,
       freeindex: scrapeFreeIndex,
       thomson: scrapeThomson,
