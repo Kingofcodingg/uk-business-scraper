@@ -940,22 +940,48 @@ export async function discoverWebsite(
 
   const allCandidates: string[] = [];
 
-  // Try Bing first (most reliable for automated searches)
-  const bingResults = await searchBingForWebsite(businessName, location);
-  allCandidates.push(...bingResults);
-  console.log(`[WebDiscovery] Bing found ${bingResults.length} candidates`);
+  // Clean business name for better searching
+  const cleanName = businessName
+    .replace(/\b(ltd|limited|plc|llp|inc|corp)\b\.?/gi, '')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  // Try DuckDuckGo as backup
-  if (allCandidates.length < 3) {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    const ddgResults = await searchDuckDuckGoForWebsite(businessName, location);
-    for (const url of ddgResults) {
+  // Try multiple search variations for better results
+  const searchVariations = [
+    { name: businessName, loc: location },
+    { name: cleanName, loc: location },
+    { name: businessName, loc: '' }, // Without location
+    { name: cleanName + ' UK', loc: '' },
+  ];
+
+  for (const variation of searchVariations) {
+    if (allCandidates.length >= 5) break;
+
+    // Try Bing first (most reliable for automated searches)
+    const bingResults = await searchBingForWebsite(variation.name, variation.loc);
+    for (const url of bingResults) {
       if (!allCandidates.includes(url)) {
         allCandidates.push(url);
       }
     }
-    console.log(`[WebDiscovery] DuckDuckGo added ${ddgResults.length} candidates`);
+
+    if (allCandidates.length === 0) {
+      // Try DuckDuckGo if Bing returns nothing
+      await new Promise(resolve => setTimeout(resolve, 200));
+      const ddgResults = await searchDuckDuckGoForWebsite(variation.name, variation.loc);
+      for (const url of ddgResults) {
+        if (!allCandidates.includes(url)) {
+          allCandidates.push(url);
+        }
+      }
+    }
+
+    if (allCandidates.length > 0) break;
+    await new Promise(resolve => setTimeout(resolve, 200));
   }
+
+  console.log(`[WebDiscovery] Found ${allCandidates.length} total candidates`);
 
   if (allCandidates.length === 0) {
     console.log(`[WebDiscovery] No website found for: ${businessName}`);
@@ -971,12 +997,12 @@ export async function discoverWebsite(
   console.log(`[WebDiscovery] Top candidates:`, scoredCandidates.slice(0, 3).map(c => `${c.url} (${c.score.toFixed(2)})`));
 
   // Return best match if score is reasonable
-  if (scoredCandidates[0].score >= 0.3) {
+  if (scoredCandidates[0].score >= 0.2) { // Lowered threshold
     console.log(`[WebDiscovery] Found likely website: ${scoredCandidates[0].url}`);
     return scoredCandidates[0].url;
   }
 
-  // Return first candidate if no good match
+  // Return first candidate even if low score (better than nothing)
   console.log(`[WebDiscovery] Using first candidate: ${scoredCandidates[0].url}`);
   return scoredCandidates[0].url;
 }

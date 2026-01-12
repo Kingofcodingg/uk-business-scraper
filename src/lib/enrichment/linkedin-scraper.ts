@@ -197,19 +197,84 @@ async function searchGoogleForLinkedIn(query: string): Promise<LinkedInProfile[]
 }
 
 /**
- * Search Bing for LinkedIn profiles (less restrictive)
+ * Search Bing for LinkedIn profiles (less restrictive, more reliable)
  */
 async function searchBingForLinkedIn(query: string): Promise<LinkedInProfile[]> {
   const profiles: LinkedInProfile[] = [];
 
   try {
-    const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=20`;
+    const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=30&setlang=en-GB&cc=GB`;
     const response = await fetch(url, {
-      headers: HEADERS,
+      headers: {
+        ...HEADERS,
+        "Accept-Language": "en-GB,en;q=0.9",
+      },
       signal: AbortSignal.timeout(10000),
     });
 
-    if (!response.ok) return profiles;
+    if (!response.ok) {
+      console.log(`[LinkedIn] Bing returned ${response.status}`);
+      return profiles;
+    }
+
+    const html = await response.text();
+
+    // Extract LinkedIn URLs with surrounding context
+    const urlPattern = /(https?:\/\/(?:www\.)?linkedin\.com\/(?:in|company)\/[\w-]+)/gi;
+    const matches = html.match(urlPattern);
+
+    if (matches) {
+      const seenUrls = new Set<string>();
+      for (const linkedinUrl of matches) {
+        // Normalize URL
+        const cleanUrl = linkedinUrl.split('?')[0];
+        if (!seenUrls.has(cleanUrl)) {
+          seenUrls.add(cleanUrl);
+
+          // Try to extract snippet context
+          const urlIndex = html.indexOf(linkedinUrl);
+          const contextStart = Math.max(0, urlIndex - 300);
+          const contextEnd = Math.min(html.length, urlIndex + 300);
+          const context = html.substring(contextStart, contextEnd)
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+          profiles.push(parseProfileFromSnippet(cleanUrl, context));
+        }
+      }
+    }
+
+    console.log(`[LinkedIn] Bing found ${profiles.length} profiles`);
+  } catch (error) {
+    console.log(`[LinkedIn] Bing search error:`, error);
+  }
+
+  return profiles;
+}
+
+/**
+ * Search DuckDuckGo for LinkedIn profiles (no captcha, reliable)
+ */
+async function searchDuckDuckGoForLinkedIn(query: string): Promise<LinkedInProfile[]> {
+  const profiles: LinkedInProfile[] = [];
+
+  try {
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&kl=uk-en`;
+    const response = await fetch(url, {
+      headers: {
+        ...HEADERS,
+        "Accept": "text/html",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      console.log(`[LinkedIn] DuckDuckGo returned ${response.status}`);
+      return profiles;
+    }
 
     const html = await response.text();
 
@@ -220,14 +285,17 @@ async function searchBingForLinkedIn(query: string): Promise<LinkedInProfile[]> 
     if (matches) {
       const seenUrls = new Set<string>();
       for (const linkedinUrl of matches) {
-        if (!seenUrls.has(linkedinUrl)) {
-          seenUrls.add(linkedinUrl);
-          profiles.push(parseProfileFromSnippet(linkedinUrl, ''));
+        const cleanUrl = linkedinUrl.split('?')[0];
+        if (!seenUrls.has(cleanUrl)) {
+          seenUrls.add(cleanUrl);
+          profiles.push(parseProfileFromSnippet(cleanUrl, ''));
         }
       }
     }
+
+    console.log(`[LinkedIn] DuckDuckGo found ${profiles.length} profiles`);
   } catch (error) {
-    console.log(`[LinkedIn] Bing search error:`, error);
+    console.log(`[LinkedIn] DuckDuckGo search error:`, error);
   }
 
   return profiles;
@@ -235,6 +303,7 @@ async function searchBingForLinkedIn(query: string): Promise<LinkedInProfile[]> 
 
 /**
  * Main LinkedIn search function - searches for company and employees
+ * Uses multiple search engines for better coverage
  */
 export async function searchLinkedIn(
   companyName: string,
@@ -251,64 +320,88 @@ export async function searchLinkedIn(
 
   console.log(`[LinkedIn] Searching for: ${companyName}`);
 
-  // Build search queries
+  // Clean company name for searching (remove Ltd, Limited, etc.)
+  const cleanName = companyName
+    .replace(/\b(ltd|limited|plc|llp|inc|corp|uk)\b\.?/gi, '')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Build search queries - try both quoted and unquoted versions
   const queries = [
-    // Company page search
-    `site:linkedin.com/company "${companyName}"`,
-    // Decision maker searches
-    `site:linkedin.com/in "${companyName}" owner`,
-    `site:linkedin.com/in "${companyName}" director`,
-    `site:linkedin.com/in "${companyName}" founder`,
-    `site:linkedin.com/in "${companyName}" managing director`,
-    `site:linkedin.com/in "${companyName}" CEO`,
-    // General employee search
-    `site:linkedin.com/in "${companyName}"`,
+    // Company page searches
+    `site:linkedin.com/company "${cleanName}"`,
+    `site:linkedin.com/company ${cleanName}`,
+    // People searches with role keywords
+    `site:linkedin.com/in "${cleanName}" director`,
+    `site:linkedin.com/in "${cleanName}" owner founder`,
+    `site:linkedin.com/in ${cleanName} managing director`,
+    `site:linkedin.com/in ${cleanName} accountant`, // For accountancy firms
+    // General people search
+    `linkedin.com/in "${cleanName}"`,
   ];
 
   // Add location-specific queries if provided
   if (location) {
-    queries.push(
-      `site:linkedin.com/in "${companyName}" "${location}"`,
-      `site:linkedin.com/in "${companyName}" "${location}" director`,
-    );
+    // Extract postcode area or city
+    const locationClean = location.replace(/[^a-zA-Z\s]/g, ' ').trim().split(/\s+/)[0];
+    if (locationClean && locationClean.length > 2) {
+      queries.unshift(
+        `site:linkedin.com/in "${cleanName}" "${locationClean}"`,
+        `site:linkedin.com/company "${cleanName}" ${locationClean}`,
+      );
+    }
   }
 
-  // Run queries (limit to avoid rate limiting)
-  const maxQueries = 4;
-  for (const query of queries.slice(0, maxQueries)) {
-    try {
-      // Try Google first
-      let profiles = await searchGoogleForLinkedIn(query);
+  const processProfiles = (profiles: LinkedInProfile[]) => {
+    for (const profile of profiles) {
+      const normalizedUrl = profile.url.split('?')[0].replace(/\/$/, '');
+      if (seenUrls.has(normalizedUrl)) continue;
+      seenUrls.add(normalizedUrl);
 
-      // Fallback to Bing if Google returns nothing
-      if (profiles.length === 0) {
-        profiles = await searchBingForLinkedIn(query);
-      }
+      result.profiles.push(profile);
 
-      // Process results
-      for (const profile of profiles) {
-        if (seenUrls.has(profile.url)) continue;
-        seenUrls.add(profile.url);
-
-        result.profiles.push(profile);
-
-        if (profile.type === 'company' && !result.companyPage) {
-          result.companyPage = profile;
-        } else if (profile.type === 'personal') {
-          result.employees.push(profile);
-          if (isDecisionMaker(profile)) {
-            result.decisionMakers.push(profile);
-          }
+      if (profile.type === 'company' && !result.companyPage) {
+        result.companyPage = profile;
+      } else if (profile.type === 'personal') {
+        result.employees.push(profile);
+        if (isDecisionMaker(profile)) {
+          result.decisionMakers.push(profile);
         }
+      }
+    }
+  };
 
-        // Stop if we have enough profiles
-        if (result.profiles.length >= maxProfiles) break;
+  // Run queries with multiple search engines
+  const maxQueries = 5;
+  for (let i = 0; i < Math.min(queries.length, maxQueries); i++) {
+    const query = queries[i];
+
+    if (result.profiles.length >= maxProfiles) break;
+
+    try {
+      // Try Bing first (most reliable for automated searches)
+      let profiles = await searchBingForLinkedIn(query);
+      processProfiles(profiles);
+
+      // If still need more, try DuckDuckGo
+      if (result.profiles.length < maxProfiles && profiles.length === 0) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        profiles = await searchDuckDuckGoForLinkedIn(query);
+        processProfiles(profiles);
       }
 
-      if (result.profiles.length >= maxProfiles) break;
+      // As last resort, try Google (often blocked but worth trying)
+      if (result.profiles.length < maxProfiles / 2 && i === 0) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        profiles = await searchGoogleForLinkedIn(query);
+        processProfiles(profiles);
+      }
 
       // Delay between queries
-      await new Promise(resolve => setTimeout(resolve, 500));
+      if (i < maxQueries - 1) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
 
     } catch (error) {
       console.log(`[LinkedIn] Query error:`, error);
