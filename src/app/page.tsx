@@ -16,6 +16,7 @@ interface Business {
   source: string;
   lead_score: number;
   lead_signals: string[];
+  distance?: string;
 }
 
 interface SearchParams {
@@ -190,14 +191,15 @@ const RADIUS_OPTIONS = [
 
 const DATA_SOURCES = [
   { id: "yell", name: "Yell.com", description: "UK Yellow Pages" },
+  { id: "google", name: "Google", description: "Local Search" },
   { id: "checkatrade", name: "Checkatrade", description: "Verified Trades" },
   { id: "freeindex", name: "FreeIndex", description: "UK Directory" },
   { id: "trustpilot", name: "Trustpilot", description: "Reviews Platform" },
   { id: "bark", name: "Bark", description: "Service Marketplace" },
   { id: "yelp", name: "Yelp UK", description: "Reviews & Ratings" },
-  { id: "google", name: "Google", description: "Local Search" },
-  { id: "cylex", name: "Cylex UK", description: "Business Directory" },
-  { id: "hotfrog", name: "Hotfrog", description: "UK Listings" },
+  { id: "thomson", name: "Thomson", description: "Thomson Local" },
+  { id: "scoot", name: "Scoot", description: "UK Directory" },
+  { id: "118", name: "118118", description: "UK Directory" },
 ];
 
 export default function Home() {
@@ -277,6 +279,7 @@ export default function Home() {
       "Name",
       "Lead Score",
       "Lead Signals",
+      "Distance",
       "Email",
       "Phone",
       "Website",
@@ -284,6 +287,7 @@ export default function Home() {
       "Postcode",
       "Industry",
       "Rating",
+      "Reviews",
       "Source",
     ];
     const csvContent = [
@@ -293,6 +297,7 @@ export default function Home() {
           `"${b.name}"`,
           `"${b.lead_score}"`,
           `"${(b.lead_signals || []).join("; ")}"`,
+          `"${b.distance || ""}"`,
           `"${b.email}"`,
           `"${b.phone}"`,
           `"${b.website}"`,
@@ -300,6 +305,7 @@ export default function Home() {
           `"${b.postcode}"`,
           `"${b.industry}"`,
           `"${b.rating}"`,
+          `"${b.review_count}"`,
           `"${b.source}"`,
         ].join(",")
       ),
@@ -550,7 +556,7 @@ export default function Home() {
                 >
                   <div className="flex justify-between items-start">
                     <div className="flex-1">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 flex-wrap">
                         <h3 className="font-semibold text-lg text-gray-900">
                           {business.name}
                         </h3>
@@ -565,6 +571,11 @@ export default function Home() {
                         >
                           {business.lead_score}% Match
                         </span>
+                        {business.distance && (
+                          <span className="px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-700">
+                            {business.distance} away
+                          </span>
+                        )}
                       </div>
                       {business.industry && (
                         <p className="text-sm text-blue-600">{business.industry}</p>
