@@ -620,6 +620,114 @@ export async function enrichPeopleWithLinkedIn(
 }
 
 /**
+ * Search for decision makers (directors) by name on LinkedIn
+ * This is more targeted than the general company search
+ */
+export async function searchDirectorOnLinkedIn(
+  directorName: string,
+  companyName: string,
+  location?: string
+): Promise<LinkedInProfile | null> {
+  console.log(`[LinkedIn] Searching for director: ${directorName} at ${companyName}`);
+
+  // Clean names for searching
+  const cleanDirectorName = directorName
+    .replace(/\b(Mr|Mrs|Ms|Miss|Dr|Prof|Sir|Dame)\b\.?/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const cleanCompanyName = companyName
+    .replace(/\b(ltd|limited|plc|llp|inc|corp|uk)\b\.?/gi, '')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Build targeted queries for this specific person
+  const queries = [
+    `site:linkedin.com/in "${cleanDirectorName}" "${cleanCompanyName}"`,
+    `site:linkedin.com/in "${cleanDirectorName}" director ${cleanCompanyName}`,
+    `linkedin.com/in "${cleanDirectorName}" ${cleanCompanyName}`,
+  ];
+
+  // Add location-specific query if available
+  if (location) {
+    const locationClean = location.replace(/[^a-zA-Z\s]/g, ' ').trim().split(/\s+/)[0];
+    if (locationClean && locationClean.length > 2) {
+      queries.unshift(`site:linkedin.com/in "${cleanDirectorName}" "${locationClean}"`);
+    }
+  }
+
+  for (const query of queries) {
+    try {
+      // Try Brave first (most reliable)
+      let profiles = await searchBraveForLinkedIn(query);
+
+      // Fallback to Bing if needed
+      if (profiles.length === 0) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        profiles = await searchBingForLinkedIn(query);
+      }
+
+      // Find best match for this director
+      for (const profile of profiles) {
+        if (profile.type === 'personal') {
+          const profileName = (profile.name || '').toLowerCase();
+          const searchName = cleanDirectorName.toLowerCase();
+
+          // Check if names match reasonably
+          const searchParts = searchName.split(' ').filter(p => p.length > 2);
+          const matchCount = searchParts.filter(part => profileName.includes(part)).length;
+
+          // At least 2 name parts should match (e.g., first and last name)
+          if (matchCount >= 2 || profileName.includes(searchName)) {
+            console.log(`[LinkedIn] Found profile for ${directorName}: ${profile.url}`);
+            return profile;
+          }
+        }
+      }
+
+      // Short delay between queries
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } catch (error) {
+      console.log(`[LinkedIn] Error searching for ${directorName}:`, error);
+    }
+  }
+
+  console.log(`[LinkedIn] No profile found for ${directorName}`);
+  return null;
+}
+
+/**
+ * Batch search for multiple directors' LinkedIn profiles
+ */
+export async function searchDirectorsOnLinkedIn(
+  directors: Array<{ name: string; role: string }>,
+  companyName: string,
+  location?: string,
+  maxDirectors: number = 5
+): Promise<Map<string, LinkedInProfile>> {
+  const results = new Map<string, LinkedInProfile>();
+
+  // Only search for top directors (limit to save time)
+  const directorsToSearch = directors.slice(0, maxDirectors);
+
+  console.log(`[LinkedIn] Searching LinkedIn for ${directorsToSearch.length} directors of ${companyName}`);
+
+  // Search sequentially with short delays to avoid rate limiting
+  for (const director of directorsToSearch) {
+    const profile = await searchDirectorOnLinkedIn(director.name, companyName, location);
+    if (profile) {
+      results.set(director.name, profile);
+    }
+    // Short delay between director searches
+    await new Promise(resolve => setTimeout(resolve, 400));
+  }
+
+  console.log(`[LinkedIn] Found ${results.size}/${directorsToSearch.length} director profiles`);
+  return results;
+}
+
+/**
  * Extract company LinkedIn insights (employees count range, etc.)
  */
 export async function getCompanyLinkedInInsights(companyUrl: string): Promise<{

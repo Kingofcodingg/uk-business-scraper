@@ -523,7 +523,16 @@ const BusinessCard = ({
               />
             )}
             {business.socialMedia?.linkedin && (
-              <QuickAction icon="in" label="LinkedIn" href={business.socialMedia.linkedin} variant="linkedin" />
+              <QuickAction icon="in" label="Company" href={business.socialMedia.linkedin} variant="linkedin" />
+            )}
+            {/* Show first decision maker with LinkedIn */}
+            {business.people?.find(p => p.linkedin) && (
+              <QuickAction
+                icon="in"
+                label={business.people.find(p => p.linkedin)?.name.split(' ')[0] || 'Director'}
+                href={business.people.find(p => p.linkedin)!.linkedin!}
+                variant="linkedin"
+              />
             )}
           </div>
 
@@ -594,46 +603,64 @@ const BusinessCard = ({
 
           {/* Additional Details */}
           <div className="grid md:grid-cols-2 gap-4 mt-4">
-            {/* Directors */}
-            {business.directors && business.directors.length > 0 && (
+            {/* Decision Makers / Directors - Combined view with LinkedIn prominently displayed */}
+            {((business.directors && business.directors.length > 0) || (business.people && business.people.length > 0)) && (
               <div className="bg-white rounded-lg p-3 border border-gray-100">
-                <h4 className="font-medium text-gray-900 text-sm mb-2">
-                  Directors ({business.directors.length})
+                <h4 className="font-medium text-gray-900 text-sm mb-2 flex items-center gap-2">
+                  Decision Makers
+                  {business.people?.filter(p => p.linkedin).length ? (
+                    <Badge variant="success" size="xs">
+                      {business.people.filter(p => p.linkedin).length} LinkedIn
+                    </Badge>
+                  ) : null}
                 </h4>
-                <div className="space-y-1">
-                  {business.directors.slice(0, 5).map((director, i) => (
-                    <div key={i} className="flex justify-between text-sm">
-                      <span className="text-gray-900">{director.name}</span>
-                      <span className="text-xs text-gray-500">{director.role}</span>
-                    </div>
-                  ))}
-                  {business.directors.length > 5 && (
-                    <p className="text-xs text-gray-400">+{business.directors.length - 5} more</p>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {/* People */}
-            {business.people && business.people.length > 0 && (
-              <div className="bg-white rounded-lg p-3 border border-gray-100">
-                <h4 className="font-medium text-gray-900 text-sm mb-2">
-                  People ({business.people.length})
-                </h4>
-                <div className="space-y-1">
-                  {business.people.slice(0, 5).map((person, i) => (
-                    <div key={i} className="flex justify-between items-center text-sm">
-                      <div className="flex items-center gap-2">
-                        <span className="text-gray-900">{person.name}</span>
-                        {person.linkedin && (
-                          <a href={person.linkedin} target="_blank" rel="noopener noreferrer" className="text-[#0A66C2]">
-                            in
-                          </a>
-                        )}
+                <div className="space-y-2">
+                  {/* Show people with LinkedIn first (decision makers with profiles) */}
+                  {business.people?.filter(p => p.linkedin).slice(0, 5).map((person, i) => (
+                    <div key={`li-${i}`} className="flex justify-between items-center text-sm bg-blue-50 rounded-lg px-2 py-1.5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-gray-900 font-medium truncate">{person.name}</span>
+                        <a
+                          href={person.linkedin}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-2 py-0.5 bg-[#0A66C2] text-white text-xs rounded hover:bg-[#084e96] transition-colors shrink-0"
+                        >
+                          <span>in</span>
+                          <span>Profile</span>
+                        </a>
                       </div>
-                      <span className="text-xs text-gray-500">{person.role}</span>
+                      <span className="text-xs text-gray-500 shrink-0 ml-2">{person.role}</span>
                     </div>
                   ))}
+                  {/* Show directors without LinkedIn found */}
+                  {business.directors?.slice(0, 5).map((director, i) => {
+                    // Skip if this director has LinkedIn in people array
+                    const hasLinkedIn = business.people?.some(
+                      p => p.linkedin && p.name.toLowerCase() === director.name.toLowerCase()
+                    );
+                    if (hasLinkedIn) return null;
+                    return (
+                      <div key={`dir-${i}`} className="flex justify-between items-center text-sm">
+                        <span className="text-gray-900">{director.name}</span>
+                        <span className="text-xs text-gray-500">{director.role}</span>
+                      </div>
+                    );
+                  })}
+                  {/* Show other people without LinkedIn */}
+                  {business.people?.filter(p => !p.linkedin).slice(0, 3).map((person, i) => {
+                    // Skip if already shown as director
+                    const isDirector = business.directors?.some(
+                      d => d.name.toLowerCase() === person.name.toLowerCase()
+                    );
+                    if (isDirector) return null;
+                    return (
+                      <div key={`other-${i}`} className="flex justify-between items-center text-sm">
+                        <span className="text-gray-900">{person.name}</span>
+                        <span className="text-xs text-gray-500">{person.role}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -948,7 +975,8 @@ export default function Home() {
       "Name", "Lead Score", "Lead Signals", "Distance", "Email", "All Emails",
       "Phone", "Website", "Address", "Postcode", "Industry", "Rating", "Reviews",
       "Source", "Company Number", "Company Status", "Company Type", "Incorporation Date",
-      "Registered Address", "Directors", "SIC Codes", "LinkedIn", "Facebook", "Twitter", "Instagram",
+      "Registered Address", "Directors", "Decision Makers with LinkedIn", "SIC Codes",
+      "Company LinkedIn", "Facebook", "Twitter", "Instagram",
     ];
 
     const csvContent = [
@@ -974,6 +1002,7 @@ export default function Home() {
         `"${b.incorporationDate || ''}"`,
         `"${(b.registeredAddress || '').replace(/"/g, '""')}"`,
         `"${(b.directors || []).map(d => `${d.name} (${d.role})`).join("; ")}"`,
+        `"${(b.people || []).filter(p => p.linkedin).map(p => `${p.name} - ${p.role}: ${p.linkedin}`).join("; ")}"`,
         `"${(b.sicCodes || []).map(s => `${s.code}: ${s.description}`).join("; ")}"`,
         `"${b.socialMedia?.linkedin || ''}"`,
         `"${b.socialMedia?.facebook || ''}"`,

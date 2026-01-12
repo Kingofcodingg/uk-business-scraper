@@ -36,6 +36,7 @@ import {
   searchLinkedIn,
   linkedInProfilesToPersons,
   enrichPeopleWithLinkedIn,
+  searchDirectorsOnLinkedIn,
   LinkedInSearchResult,
 } from './linkedin-scraper';
 import { discoverSocialMedia, mergeSocialMedia } from './social-media-scraper';
@@ -296,6 +297,57 @@ export async function enrichBusiness(
     }
   } else if (linkedInResult.status === 'rejected') {
     errors.push(`LinkedIn search failed: ${linkedInResult.reason}`);
+  }
+
+  // ========== PHASE 1.5: Search for director LinkedIn profiles by name ==========
+  // This is more targeted - we use director names from Companies House
+  const chData = chResult.status === 'fulfilled' ? chResult.value : null;
+  if (chData && chData.directors && chData.directors.length > 0) {
+    try {
+      console.log(`[Enrich] Searching LinkedIn for ${chData.directors.length} directors by name...`);
+      const directorProfiles = await searchDirectorsOnLinkedIn(
+        chData.directors,
+        business.name,
+        postcode,
+        5 // Search for up to 5 directors
+      );
+
+      // Link found profiles to existing people/directors
+      for (const [directorName, profile] of directorProfiles) {
+        // Check if this director is already in our people list
+        const existingPerson = result.people.find(
+          p => p.name.toLowerCase() === directorName.toLowerCase()
+        );
+
+        if (existingPerson && !existingPerson.linkedin) {
+          // Update existing person with LinkedIn
+          existingPerson.linkedin = profile.url;
+          if (profile.title && existingPerson.role === 'Director') {
+            existingPerson.role = profile.title;
+          }
+          console.log(`[Enrich] Linked ${directorName} to LinkedIn: ${profile.url}`);
+        } else if (!existingPerson) {
+          // Add new person from LinkedIn
+          const { firstName, lastName } = parseName(directorName);
+          result.people.push({
+            name: directorName,
+            firstName,
+            lastName,
+            role: profile.title || 'Director',
+            source: 'linkedin',
+            emails: [],
+            linkedin: profile.url,
+          });
+          console.log(`[Enrich] Added ${directorName} with LinkedIn: ${profile.url}`);
+        }
+      }
+
+      if (directorProfiles.size > 0) {
+        sources.push('director-linkedin');
+      }
+    } catch (err) {
+      errors.push(`Director LinkedIn search failed: ${err}`);
+    }
   }
 
   // ========== PHASE 2: Website crawl (needs website from Phase 1) ==========
