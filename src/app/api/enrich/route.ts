@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
 
     console.log(`\n========== ENRICHING: ${businessName} ==========`);
 
-    // Use the new enrichment service
+    // Use the new enrichment service with full enrichment
     const enrichedLead = await enrichBusiness({
       name: businessName,
       website,
@@ -34,16 +34,20 @@ export async function POST(request: NextRequest) {
       industry,
       distance,
     }, {
-      crawlWebsite: !!website,
+      discoverWebsite: true,  // Find website via Google if missing
+      crawlWebsite: true,     // Crawl website for emails/phones/people
       searchCompaniesHouse: true,
       guessEmails: true,
-      searchLinkedIn: false, // Can enable for deeper enrichment
+      searchLinkedIn: true,   // LinkedIn scraping enabled
     });
 
     // Convert to the format expected by the frontend
     const response = {
       success: true,
       enrichedData: {
+        // Discovered/confirmed website
+        website: enrichedLead.website,
+
         // Companies House data
         companyNumber: enrichedLead.companiesHouse?.companyNumber,
         companyStatus: enrichedLead.companiesHouse?.companyStatus,
@@ -94,9 +98,11 @@ export async function POST(request: NextRequest) {
     };
 
     console.log(`[Enrich] Complete: ${businessName}`);
+    console.log(`  - Website: ${enrichedLead.website || 'Not found'}`);
     console.log(`  - Company: ${enrichedLead.companiesHouse?.companyNumber || 'Not found'}`);
     console.log(`  - Emails: ${enrichedLead.emails.length}`);
     console.log(`  - People: ${enrichedLead.people.length}`);
+    console.log(`  - LinkedIn: ${enrichedLead.socialMedia.linkedin || 'Not found'}`);
     console.log(`  - Social: ${Object.values(enrichedLead.socialMedia).filter(Boolean).length} platforms`);
     console.log(`  - Score: ${enrichedLead.leadScore.total} (${enrichedLead.leadScore.priorityRank})`);
 
@@ -137,10 +143,11 @@ export async function PUT(request: NextRequest) {
     }));
 
     const enrichedLeads = await enrichBusinesses(toEnrich, {
+      discoverWebsite: true,
       crawlWebsite: true,
       searchCompaniesHouse: true,
       guessEmails: true,
-      searchLinkedIn: false,
+      searchLinkedIn: true,
     }, 3); // Process 3 at a time
 
     const results = enrichedLeads.map(lead => ({

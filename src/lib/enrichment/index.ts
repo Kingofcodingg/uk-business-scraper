@@ -21,7 +21,7 @@ import {
 } from './types';
 
 import { guessEmails, guessEmailsForTeam, parseName } from './email-guesser';
-import { crawlWebsite, searchLinkedInProfiles } from './website-crawler';
+import { crawlWebsite, searchLinkedInProfiles, discoverWebsite } from './website-crawler';
 import { searchCompaniesHouse } from './companies-house';
 import { calculateLeadScore, generateLeadSignals } from './lead-scorer';
 
@@ -42,6 +42,7 @@ interface BasicBusiness {
 
 interface EnrichmentOptions {
   // Which features to run
+  discoverWebsite?: boolean;  // Search Google to find website if missing
   crawlWebsite?: boolean;
   searchCompaniesHouse?: boolean;
   guessEmails?: boolean;
@@ -53,10 +54,11 @@ interface EnrichmentOptions {
 }
 
 const DEFAULT_OPTIONS: EnrichmentOptions = {
+  discoverWebsite: true,  // Auto-discover website if missing
   crawlWebsite: true,
   searchCompaniesHouse: true,
   guessEmails: true,
-  searchLinkedIn: false, // Off by default (can be slow)
+  searchLinkedIn: true,  // Now enabled by default
   maxEmailGuesses: 5,
   maxLinkedInProfiles: 5,
 };
@@ -155,11 +157,31 @@ export async function enrichBusiness(
     result.totalReviews = parseInt(business.review_count || '0');
   }
 
-  // Step 1: Crawl website for detailed info
-  if (opts.crawlWebsite && business.website) {
+  // Step 0: Discover website if we don't have one
+  let websiteToUse = business.website;
+  if (opts.discoverWebsite && !websiteToUse) {
     try {
-      console.log(`[Enrich] Crawling website: ${business.website}`);
-      const crawlResult = await crawlWebsite(business.website);
+      console.log(`[Enrich] No website provided - searching Google...`);
+      const discoveredSite = await discoverWebsite(
+        business.name,
+        business.postcode || result.addresses[0]?.postcode || ''
+      );
+      if (discoveredSite) {
+        websiteToUse = discoveredSite;
+        result.website = discoveredSite;
+        sources.push('website-discovery');
+        console.log(`[Enrich] Discovered website: ${discoveredSite}`);
+      }
+    } catch (err) {
+      errors.push(`Website discovery failed: ${err}`);
+    }
+  }
+
+  // Step 1: Crawl website for detailed info
+  if (opts.crawlWebsite && websiteToUse) {
+    try {
+      console.log(`[Enrich] Crawling website: ${websiteToUse}`);
+      const crawlResult = await crawlWebsite(websiteToUse);
       sources.push('website-crawl');
 
       // Add emails
@@ -271,12 +293,12 @@ export async function enrichBusiness(
   }
 
   // Step 3: Guess emails for people (if we have a domain)
-  if (opts.guessEmails && business.website && result.people.length > 0) {
+  if (opts.guessEmails && websiteToUse && result.people.length > 0) {
     try {
       console.log(`[Enrich] Guessing emails for ${result.people.length} people...`);
 
       // Extract domain from website
-      const domain = business.website
+      const domain = websiteToUse
         .replace(/^(https?:\/\/)?(www\.)?/, '')
         .split('/')[0];
 

@@ -651,6 +651,104 @@ export async function crawlWebsite(websiteUrl: string): Promise<CrawlResult> {
 }
 
 /**
+ * Search Google to discover a business website
+ */
+export async function discoverWebsite(
+  businessName: string,
+  location: string
+): Promise<string | null> {
+  console.log(`[WebDiscovery] Searching for website: ${businessName} in ${location}`);
+
+  // Build search query
+  const query = location
+    ? `"${businessName}" ${location} site:uk OR site:co.uk`
+    : `"${businessName}" UK website`;
+
+  try {
+    const url = `https://www.google.com/search?q=${encodeURIComponent(query)}&num=10`;
+    const response = await fetch(url, {
+      headers: HEADERS,
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      console.log(`[WebDiscovery] Google search failed: ${response.status}`);
+      return null;
+    }
+
+    const html = await response.text();
+
+    // Extract URLs from Google results
+    const urlPatterns = [
+      // Direct href links
+      /href="\/url\?q=(https?:\/\/(?!www\.google|maps\.google|support\.google|accounts\.google)[^&"]+)/gi,
+      // Visible URLs in results
+      /<cite[^>]*>([a-z0-9][\w.-]*\.[a-z]{2,})/gi,
+    ];
+
+    const candidateUrls: string[] = [];
+
+    for (const pattern of urlPatterns) {
+      const matches = html.matchAll(pattern);
+      for (const match of Array.from(matches)) {
+        let candidateUrl = decodeURIComponent(match[1]).split('&')[0];
+
+        // Skip unwanted domains
+        const skipDomains = [
+          'google.com', 'facebook.com', 'linkedin.com', 'twitter.com', 'instagram.com',
+          'youtube.com', 'yelp.com', 'yell.com', 'tripadvisor.com', 'trustpilot.com',
+          'checkatrade.com', 'mybuilder.com', 'bark.com', 'freeindex.co.uk',
+          'cylex-uk.co.uk', 'scoot.co.uk', 'hotfrog.co.uk', 'brownbook.net',
+          'wikipedia.org', 'gov.uk', 'companieshouse.gov.uk', 'amazon.', 'ebay.',
+        ];
+
+        if (skipDomains.some(d => candidateUrl.includes(d))) continue;
+
+        // Normalize URL
+        if (!candidateUrl.startsWith('http')) {
+          candidateUrl = `https://${candidateUrl}`;
+        }
+
+        // Only accept UK-relevant domains or .com
+        if (candidateUrl.match(/\.(co\.uk|uk|com|org|net)\/?/i)) {
+          candidateUrls.push(candidateUrl);
+        }
+      }
+    }
+
+    // Check if any URL contains the business name (fuzzy match)
+    const businessWords = businessName.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .split(/\s+/)
+      .filter(w => w.length > 2 && !['the', 'and', 'ltd', 'limited', 'plc', 'uk'].includes(w));
+
+    for (const candidateUrl of candidateUrls) {
+      const urlLower = candidateUrl.toLowerCase();
+
+      // Check if URL contains business name words
+      const matchingWords = businessWords.filter(word => urlLower.includes(word));
+      if (matchingWords.length >= Math.min(2, businessWords.length)) {
+        console.log(`[WebDiscovery] Found likely website: ${candidateUrl}`);
+        return candidateUrl;
+      }
+    }
+
+    // Return first candidate if no name match
+    if (candidateUrls.length > 0) {
+      console.log(`[WebDiscovery] Using first candidate: ${candidateUrls[0]}`);
+      return candidateUrls[0];
+    }
+
+    console.log(`[WebDiscovery] No website found for: ${businessName}`);
+    return null;
+
+  } catch (error) {
+    console.log(`[WebDiscovery] Search error:`, error);
+    return null;
+  }
+}
+
+/**
  * Search Google for LinkedIn profiles for a company
  */
 export async function searchLinkedInProfiles(
