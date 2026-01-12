@@ -22,6 +22,7 @@ interface Business {
 const postcodeCache: Map<string, { lat: number; lng: number } | null> = new Map();
 
 // Get coordinates from postcodes.io (free, no API key required)
+// Also supports place names via fallback
 async function getPostcodeCoords(postcode: string): Promise<{ lat: number; lng: number } | null> {
   if (!postcode) return null;
 
@@ -32,22 +33,59 @@ async function getPostcodeCoords(postcode: string): Promise<{ lat: number; lng: 
     return postcodeCache.get(clean) || null;
   }
 
+  // Check if it looks like a postcode (has numbers)
+  const isPostcode = /\d/.test(clean);
+
   try {
-    const response = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(clean)}`, {
+    if (isPostcode) {
+      // Try as postcode first
+      const response = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(clean)}`, {
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.status === 200 && data.result) {
+          const coords = { lat: data.result.latitude, lng: data.result.longitude };
+          postcodeCache.set(clean, coords);
+          return coords;
+        }
+      }
+    }
+
+    // Try as place name (city/town)
+    const placeResponse = await fetch(`https://api.postcodes.io/places?q=${encodeURIComponent(postcode)}&limit=1`, {
       headers: { 'Accept': 'application/json' },
     });
 
-    if (!response.ok) {
-      postcodeCache.set(clean, null);
-      return null;
+    if (placeResponse.ok) {
+      const placeData = await placeResponse.json();
+      if (placeData.status === 200 && placeData.result && placeData.result.length > 0) {
+        const place = placeData.result[0];
+        const coords = { lat: place.latitude, lng: place.longitude };
+        postcodeCache.set(clean, coords);
+        console.log(`[Geocode] Found place: ${postcode} -> ${place.name_1} (${coords.lat}, ${coords.lng})`);
+        return coords;
+      }
     }
 
-    const data = await response.json();
+    // Try outcode (first part of postcode like "SW1" or "M1")
+    if (isPostcode && clean.length >= 2) {
+      const outcode = clean.match(/^[A-Z]{1,2}\d{1,2}/)?.[0];
+      if (outcode) {
+        const outcodeResponse = await fetch(`https://api.postcodes.io/outcodes/${encodeURIComponent(outcode)}`, {
+          headers: { 'Accept': 'application/json' },
+        });
 
-    if (data.status === 200 && data.result) {
-      const coords = { lat: data.result.latitude, lng: data.result.longitude };
-      postcodeCache.set(clean, coords);
-      return coords;
+        if (outcodeResponse.ok) {
+          const outcodeData = await outcodeResponse.json();
+          if (outcodeData.status === 200 && outcodeData.result) {
+            const coords = { lat: outcodeData.result.latitude, lng: outcodeData.result.longitude };
+            postcodeCache.set(clean, coords);
+            return coords;
+          }
+        }
+      }
     }
 
     postcodeCache.set(clean, null);
@@ -193,24 +231,35 @@ function extractPostcode(text: string): string {
 }
 
 function extractPhone(text: string): string {
-  // Match UK phone numbers with strict digit count (10-11 digits after country code)
+  // Match UK phone numbers - must be exactly 10-11 digits
   const patterns = [
-    // Standard UK format: 01onal or 02onal (landlines)
-    /\b(0[1-9]\d{2,3}[\s.-]?\d{3}[\s.-]?\d{3,4})\b/,
-    // Mobile format: 07xxx
+    // Mobile format: 07xxx xxx xxx (11 digits starting with 07)
     /\b(07\d{3}[\s.-]?\d{3}[\s.-]?\d{3})\b/,
-    // With +44: +44 xxx or +44 (0)xxx
-    /\b(\+44[\s.-]?\(?\d?\)?[\s.-]?\d{2,4}[\s.-]?\d{3}[\s.-]?\d{3,4})\b/,
+    // Standard UK landline: 01xxx xxxxxx or 02x xxxx xxxx (10-11 digits)
+    /\b(0[1-9]\d{2,3}[\s.-]?\d{3}[\s.-]?\d{3,4})\b/,
+    // With +44: converts to 11 digits
+    /\b(\+44[\s.-]?\(?0?\)?[\s.-]?[1-9]\d{2,3}[\s.-]?\d{3}[\s.-]?\d{3,4})\b/,
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match) {
       let phone = match[1].replace(/\s+/g, ' ').trim();
-      // Validate total digit count (should be 10-11 for UK)
+      // Get just the digits
       const digits = phone.replace(/\D/g, '');
-      if (digits.length >= 10 && digits.length <= 13) {
-        return phone;
+
+      // UK numbers: exactly 10 or 11 digits (starting with 0)
+      // +44 numbers: 12 digits (44 + 10 digit number)
+      if (digits.startsWith('44')) {
+        // +44 format - should be 12 digits total (44 + 10)
+        if (digits.length === 12) {
+          return phone;
+        }
+      } else if (digits.startsWith('0')) {
+        // UK format - should be 10 or 11 digits
+        if (digits.length === 10 || digits.length === 11) {
+          return phone;
+        }
       }
     }
   }
@@ -309,16 +358,23 @@ function createBusiness(data: Partial<Business>, source: string): Business | nul
   const rawAddress = data.address || "";
   const address = cleanAddress(rawAddress) || "";
 
-  // Clean and validate phone number
+  // Clean and validate phone number - UK numbers are exactly 10-11 digits
   let phone = data.phone || "";
   if (phone) {
-    // Remove any non-phone characters and validate length
     const digits = phone.replace(/\D/g, '');
-    // UK phone numbers should be 10-11 digits (or 12-13 with country code)
-    if (digits.length < 10 || digits.length > 13) {
+    // Strict UK validation:
+    // - Starting with 0: must be exactly 10 or 11 digits
+    // - Starting with 44: must be exactly 12 digits (+44 plus 10)
+    let isValid = false;
+    if (digits.startsWith('44') && digits.length === 12) {
+      isValid = true;
+    } else if (digits.startsWith('0') && (digits.length === 10 || digits.length === 11)) {
+      isValid = true;
+    }
+
+    if (!isValid) {
       phone = ""; // Invalid phone number
     } else {
-      // Format nicely
       phone = phone.replace(/\s+/g, ' ').trim();
     }
   }
@@ -925,7 +981,7 @@ async function scrapeTrustpilot(query: string, location: string, maxPages: numbe
 }
 
 // ============================================================================
-// GOOGLE LOCAL SEARCH - Enhanced with multiple search patterns
+// GOOGLE LOCAL SEARCH - Enhanced with website discovery
 // ============================================================================
 async function scrapeGoogle(query: string, location: string, maxPages: number): Promise<Business[]> {
   const businesses: Business[] = [];
@@ -981,11 +1037,16 @@ async function scrapeGoogle(query: string, location: string, maxPages: number): 
             const fullAddressMatch = context.match(/(?:Address|Located at|at)\s*:?\s*([^<]{10,80})/i);
             const address = fullAddressMatch ? cleanText(fullAddressMatch[1]) : location;
 
+            // Try to find website URL in context
+            const websiteMatch = context.match(/href="(https?:\/\/(?!www\.google|maps\.google|support\.google)[a-z0-9.-]+\.[a-z]{2,}[^"]*)"[^>]*>/i);
+            const website = websiteMatch ? websiteMatch[1].split('?')[0] : "";
+
             addBusiness(businesses, {
               name,
               rating: ratingMatch ? ratingMatch[1] : "",
               review_count: ratingMatch ? ratingMatch[2] : "",
               phone,
+              website,
               industry: query,
               address,
               postcode,
@@ -1002,6 +1063,46 @@ async function scrapeGoogle(query: string, location: string, maxPages: number): 
 
   console.log(`[Google] Found ${businesses.length} businesses`);
   return businesses;
+}
+
+// ============================================================================
+// WEBSITE DISCOVERY - Find website for a business name via Google
+// ============================================================================
+async function findBusinessWebsite(businessName: string, location: string): Promise<string> {
+  try {
+    const searchQuery = `${businessName} ${location} official website`;
+    const url = `https://www.google.com/search?q=${encodeURIComponent(searchQuery)}&num=5`;
+
+    const response = await fetch(url, { headers: HEADERS });
+    if (!response.ok) return "";
+
+    const html = await response.text();
+
+    // Look for the first non-directory website
+    const skipDomains = ['yell.com', 'yelp.', 'trustpilot.', 'facebook.com', 'linkedin.com',
+                         'twitter.com', 'instagram.com', 'youtube.com', 'google.', 'wikipedia.',
+                         'freeindex.', 'checkatrade.', 'bark.com', 'scoot.', 'thomsonlocal.',
+                         '118118.', 'cylex.', 'hotfrog.', 'businesslist.'];
+
+    // Pattern to find URLs in search results
+    const urlPattern = /href="\/url\?q=(https?:\/\/[^&"]+)/gi;
+    const matches = html.matchAll(urlPattern);
+
+    for (const match of Array.from(matches)) {
+      const foundUrl = decodeURIComponent(match[1]);
+      const domain = foundUrl.toLowerCase();
+
+      // Skip directory sites
+      if (skipDomains.some(skip => domain.includes(skip))) continue;
+
+      // Return the first real business website
+      return foundUrl.split('?')[0]; // Remove query params
+    }
+
+    return "";
+  } catch {
+    return "";
+  }
 }
 
 // ============================================================================
@@ -1446,10 +1547,12 @@ function extractPhones(html: string, phones: string[], seen: Set<string>): void 
   const patterns = [
     // Tel links
     /href="tel:([^"]+)"/gi,
-    // UK formats
-    /\b(0[1-9]\d{2,3}[\s.-]?\d{3}[\s.-]?\d{3,4})\b/g,
+    // Mobile format: 07xxx (11 digits)
     /\b(07\d{3}[\s.-]?\d{3}[\s.-]?\d{3})\b/g,
-    /\b(\+44[\s.-]?\(?\d?\)?[\s.-]?\d{2,4}[\s.-]?\d{3}[\s.-]?\d{3,4})\b/g,
+    // UK landlines (10-11 digits)
+    /\b(0[1-9]\d{2,3}[\s.-]?\d{3}[\s.-]?\d{3,4})\b/g,
+    // +44 format
+    /\b(\+44[\s.-]?\(?0?\)?[\s.-]?[1-9]\d{2,3}[\s.-]?\d{3}[\s.-]?\d{3,4})\b/g,
   ];
 
   for (const pattern of patterns) {
@@ -1460,9 +1563,17 @@ function extractPhones(html: string, phones: string[], seen: Set<string>): void 
       // Clean up tel: prefix if present
       phone = phone.replace(/^tel:/i, '');
 
-      // Validate digit count
+      // Validate digit count - strict UK rules
       const digits = phone.replace(/\D/g, '');
-      if (digits.length < 10 || digits.length > 13) continue;
+      let isValid = false;
+
+      if (digits.startsWith('44') && digits.length === 12) {
+        isValid = true; // +44 format
+      } else if (digits.startsWith('0') && (digits.length === 10 || digits.length === 11)) {
+        isValid = true; // UK format
+      }
+
+      if (!isValid) continue;
 
       // Normalize for deduplication
       const normalized = digits;
@@ -1703,6 +1814,55 @@ async function enrichBusinesses(businesses: Business[], maxEnrich: number = 20):
   return businesses.map(b => enrichedMap.get(b.name) || b);
 }
 
+// Find websites for businesses that don't have them
+async function discoverWebsites(businesses: Business[], location: string, maxDiscover: number = 10): Promise<Business[]> {
+  // Only discover websites for businesses without one
+  const needsWebsite = businesses
+    .filter(b => !b.website && b.name)
+    .slice(0, maxDiscover);
+
+  if (needsWebsite.length === 0) {
+    return businesses;
+  }
+
+  console.log(`[Discovery] Finding websites for ${needsWebsite.length} businesses...`);
+
+  const discoveredMap = new Map<string, string>();
+
+  // Process in small batches to avoid rate limiting
+  const batchSize = 3;
+  for (let i = 0; i < needsWebsite.length; i += batchSize) {
+    const batch = needsWebsite.slice(i, i + batchSize);
+    const results = await Promise.all(
+      batch.map(async b => {
+        const website = await findBusinessWebsite(b.name, location);
+        return { name: b.name, website };
+      })
+    );
+
+    for (const result of results) {
+      if (result.website) {
+        discoveredMap.set(result.name, result.website);
+        console.log(`[Discovery] Found website for ${result.name}: ${result.website}`);
+      }
+    }
+
+    // Delay between batches
+    if (i + batchSize < needsWebsite.length) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+
+  // Update businesses with discovered websites
+  return businesses.map(b => {
+    const website = discoveredMap.get(b.name);
+    if (website) {
+      return { ...b, website };
+    }
+    return b;
+  });
+}
+
 // ============================================================================
 // MAIN API HANDLER
 // ============================================================================
@@ -1776,11 +1936,15 @@ export async function POST(request: NextRequest) {
     console.log(`\nCalculating distances from ${searchLocation}...`);
     let businessesWithDistance = await calculateDistances(uniqueBusinesses, searchLocation);
 
+    // Discover websites for businesses that don't have them
+    console.log(`\nDiscovering websites for businesses without one...`);
+    let businessesWithWebsites = await discoverWebsites(businessesWithDistance, searchLocation, 15);
+
     // Enrich businesses with emails from their websites
-    let finalBusinesses = businessesWithDistance;
-    if (enrich_emails && businessesWithDistance.length > 0) {
+    let finalBusinesses = businessesWithWebsites;
+    if (enrich_emails && businessesWithWebsites.length > 0) {
       console.log(`\nEnriching top businesses with email/description...`);
-      finalBusinesses = await enrichBusinesses(businessesWithDistance, 15);
+      finalBusinesses = await enrichBusinesses(businessesWithWebsites, 15);
     }
 
     const elapsed = Date.now() - startTime;

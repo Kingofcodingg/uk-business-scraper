@@ -741,88 +741,92 @@ export default function Home() {
               {results.map((business, index) => (
                 <div
                   key={index}
-                  className={`border-2 rounded-lg p-4 hover:shadow-md transition-shadow ${
+                  className={`border-2 rounded-lg overflow-hidden hover:shadow-lg transition-all cursor-pointer ${
                     business.lead_score >= 80
                       ? "border-green-500 bg-green-50"
                       : business.lead_score >= 60
                       ? "border-yellow-500 bg-yellow-50"
-                      : "border-gray-200"
-                  }`}
+                      : "border-gray-200 bg-white"
+                  } ${expandedBusiness === index ? "ring-2 ring-blue-400" : ""}`}
+                  onClick={() => setExpandedBusiness(expandedBusiness === index ? null : index)}
                 >
-                  <div className="flex justify-between items-start gap-4">
-                    <div className="flex items-start gap-3">
-                      <input
-                        type="checkbox"
-                        checked={selectedBusinesses.has(index)}
-                        onChange={() => toggleSelect(index)}
-                        className="mt-1.5 h-4 w-4 rounded border-gray-300"
-                      />
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 flex-wrap">
-                          <h3 className="font-semibold text-lg text-gray-900">
-                            {business.name}
-                          </h3>
-                          <span
-                            className={`px-2 py-1 rounded-full text-xs font-bold ${
-                              business.lead_score >= 80
-                                ? "bg-green-600 text-white"
-                                : business.lead_score >= 60
-                                ? "bg-yellow-500 text-white"
-                                : "bg-gray-400 text-white"
-                            }`}
-                          >
-                            {business.lead_score}% Match
-                          </span>
-                          {business.distance && (
-                            <span className="px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-700">
-                              {business.distance}
+                  <div className="p-4">
+                    <div className="flex justify-between items-start gap-4">
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedBusinesses.has(index)}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            toggleSelect(index);
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                          className="mt-1.5 h-4 w-4 rounded border-gray-300"
+                        />
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <h3 className="font-semibold text-lg text-gray-900">
+                              {business.name}
+                            </h3>
+                            <span
+                              className={`px-2 py-1 rounded-full text-xs font-bold ${
+                                business.lead_score >= 80
+                                  ? "bg-green-600 text-white"
+                                  : business.lead_score >= 60
+                                  ? "bg-yellow-500 text-white"
+                                  : "bg-gray-400 text-white"
+                              }`}
+                            >
+                              {business.lead_score}% Match
                             </span>
+                            {business.distance && (
+                              <span className="px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-700">
+                                ~{business.distance} away
+                              </span>
+                            )}
+                            {business.companyStatus && (
+                              <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(business.companyStatus)}`}>
+                                {business.companyStatus}
+                              </span>
+                            )}
+                            {business.enriched && (
+                              <span className="px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-700">
+                                Enriched
+                              </span>
+                            )}
+                          </div>
+                          {business.industry && (
+                            <p className="text-sm text-blue-600">{business.industry}</p>
                           )}
-                          {business.companyStatus && (
-                            <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(business.companyStatus)}`}>
-                              {business.companyStatus}
-                            </span>
-                          )}
-                          {business.enriched && (
-                            <span className="px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-700">
-                              Enriched
-                            </span>
+                          {business.companyNumber && (
+                            <p className="text-xs text-gray-500">
+                              Co. #{business.companyNumber} | {business.companyType}
+                              {business.incorporationDate && ` | Inc. ${business.incorporationDate}`}
+                            </p>
                           )}
                         </div>
-                        {business.industry && (
-                          <p className="text-sm text-blue-600">{business.industry}</p>
-                        )}
-                        {business.companyNumber && (
-                          <p className="text-xs text-gray-500">
-                            Co. #{business.companyNumber} | {business.companyType}
-                            {business.incorporationDate && ` | Inc. ${business.incorporationDate}`}
-                          </p>
-                        )}
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => enrichBusiness(index)}
-                        disabled={business.enriched || business.enriching}
-                        className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-                          business.enriched
-                            ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                            : business.enriching
-                            ? "bg-indigo-200 text-indigo-700"
-                            : "bg-indigo-600 text-white hover:bg-indigo-700"
-                        }`}
-                      >
-                        {business.enriching ? "Enriching..." : business.enriched ? "Enriched" : "Enrich"}
-                      </button>
-                      <button
-                        onClick={() => setExpandedBusiness(expandedBusiness === index ? null : index)}
-                        className="px-2 py-1.5 text-xs border border-gray-300 rounded-lg hover:bg-gray-50"
-                      >
-                        {expandedBusiness === index ? "Less" : "More"}
-                      </button>
-                      <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
-                        {business.source}
-                      </span>
+                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => enrichBusiness(index)}
+                          disabled={business.enriched || business.enriching}
+                          className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
+                            business.enriched
+                              ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                              : business.enriching
+                              ? "bg-indigo-200 text-indigo-700"
+                              : "bg-indigo-600 text-white hover:bg-indigo-700"
+                          }`}
+                        >
+                          {business.enriching ? "Enriching..." : business.enriched ? "Enriched" : "Enrich"}
+                        </button>
+                        <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                          {business.source}
+                        </span>
+                        <span className="text-xs text-gray-400">
+                          {expandedBusiness === index ? "▲" : "▼"}
+                        </span>
+                      </div>
                     </div>
                   </div>
 
@@ -928,44 +932,188 @@ export default function Home() {
                     </p>
                   )}
 
-                  {/* Expanded Details */}
+                  {/* Expanded Details - Sales-Focused Info Panel */}
                   {expandedBusiness === index && (
-                    <div className="mt-4 pt-4 border-t border-gray-200">
-                      <div className="grid md:grid-cols-2 gap-4">
+                    <div className="mt-4 pt-4 border-t-2 border-blue-200 bg-blue-50/30 -mx-4 px-4 pb-4" onClick={(e) => e.stopPropagation()}>
+                      {/* Quick Actions Bar */}
+                      <div className="flex flex-wrap gap-2 mb-4 pb-3 border-b border-gray-200">
+                        <h4 className="text-sm font-semibold text-gray-700 w-full mb-1">Quick Actions:</h4>
+                        {business.phone && (
+                          <a
+                            href={`tel:${business.phone}`}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700"
+                          >
+                            📞 Call Now
+                          </a>
+                        )}
+                        {(business.email || business.emails?.[0]?.address) && (
+                          <a
+                            href={`mailto:${business.emails?.[0]?.address || business.email}`}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
+                          >
+                            ✉️ Send Email
+                          </a>
+                        )}
+                        {business.website && (
+                          <a
+                            href={business.website.startsWith('http') ? business.website : `https://${business.website}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700"
+                          >
+                            🌐 Visit Website
+                          </a>
+                        )}
+                        {business.socialMedia?.linkedin && (
+                          <a
+                            href={business.socialMedia.linkedin}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-700 text-white text-sm rounded-lg hover:bg-blue-800"
+                          >
+                            💼 LinkedIn
+                          </a>
+                        )}
+                      </div>
+
+                      <div className="grid md:grid-cols-3 gap-4">
+                        {/* Contact Info Column */}
+                        <div className="bg-white p-3 rounded-lg border border-gray-200">
+                          <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">📇 Contact Details</h4>
+                          <div className="space-y-2 text-sm">
+                            {business.phone && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Phone:</span>
+                                <p className="font-medium text-gray-900">{business.phone}</p>
+                              </div>
+                            )}
+                            {(business.email || business.emails?.[0]?.address) && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Primary Email:</span>
+                                <p className="font-medium text-blue-600 break-all">{business.emails?.[0]?.address || business.email}</p>
+                              </div>
+                            )}
+                            {business.address && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Address:</span>
+                                <p className="text-gray-700">{business.address}</p>
+                                {business.postcode && <p className="font-mono text-gray-600">{business.postcode}</p>}
+                              </div>
+                            )}
+                            {business.website && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Website:</span>
+                                <p className="text-blue-600 truncate">{business.website.replace(/^https?:\/\//, '')}</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Company Info Column */}
+                        <div className="bg-white p-3 rounded-lg border border-gray-200">
+                          <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">🏢 Company Info</h4>
+                          <div className="space-y-2 text-sm">
+                            {business.companyNumber && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Company #:</span>
+                                <p className="font-mono text-gray-900">{business.companyNumber}</p>
+                              </div>
+                            )}
+                            {business.companyType && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Type:</span>
+                                <p className="text-gray-700">{business.companyType}</p>
+                              </div>
+                            )}
+                            {business.companyStatus && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Status:</span>
+                                <p className={`font-medium ${business.companyStatus === 'active' ? 'text-green-600' : 'text-red-600'}`}>
+                                  {business.companyStatus.toUpperCase()}
+                                </p>
+                              </div>
+                            )}
+                            {business.incorporationDate && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Founded:</span>
+                                <p className="text-gray-700">{business.incorporationDate}</p>
+                              </div>
+                            )}
+                            {business.rating && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Rating:</span>
+                                <p className="text-yellow-600 font-medium">
+                                  ⭐ {business.rating} {business.review_count && `(${business.review_count} reviews)`}
+                                </p>
+                              </div>
+                            )}
+                            {business.industry && (
+                              <div>
+                                <span className="text-gray-500 text-xs">Industry:</span>
+                                <p className="text-gray-700">{business.industry}</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Sales Opportunity Column */}
+                        <div className="bg-white p-3 rounded-lg border border-gray-200">
+                          <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">🎯 Sales Opportunities</h4>
+                          <div className="space-y-2">
+                            {business.lead_signals && business.lead_signals.length > 0 ? (
+                              <div className="space-y-1">
+                                {business.lead_signals.map((signal, i) => (
+                                  <div key={i} className="flex items-start gap-2 text-xs">
+                                    <span className="text-orange-500">•</span>
+                                    <span className="text-gray-700">{signal}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-gray-500">No specific opportunities identified</p>
+                            )}
+                            {business.description && (
+                              <div className="mt-2 pt-2 border-t border-gray-100">
+                                <span className="text-gray-500 text-xs block mb-1">About:</span>
+                                <p className="text-xs text-gray-600">{business.description}</p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Additional Details Row */}
+                      <div className="grid md:grid-cols-2 gap-4 mt-4">
                         {/* Directors */}
                         {business.directors && business.directors.length > 0 && (
-                          <div>
-                            <h4 className="font-medium text-gray-900 mb-2">Directors</h4>
+                          <div className="bg-white p-3 rounded-lg border border-gray-200">
+                            <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">👥 Key People / Directors</h4>
                             <div className="space-y-1">
                               {business.directors.map((director, i) => (
-                                <div key={i} className="text-sm">
-                                  <span className="font-medium">{director.name}</span>
-                                  <span className="text-gray-500"> - {director.role}</span>
-                                  {director.appointedOn && (
-                                    <span className="text-gray-400 text-xs"> (since {director.appointedOn})</span>
-                                  )}
+                                <div key={i} className="text-sm flex justify-between">
+                                  <span className="font-medium text-gray-900">{director.name}</span>
+                                  <span className="text-gray-500 text-xs">{director.role}</span>
                                 </div>
                               ))}
                             </div>
                           </div>
                         )}
 
-                        {/* All Emails */}
+                        {/* All Emails Found */}
                         {business.emails && business.emails.length > 0 && (
-                          <div>
-                            <h4 className="font-medium text-gray-900 mb-2">Emails Found</h4>
+                          <div className="bg-white p-3 rounded-lg border border-gray-200">
+                            <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">📧 All Emails Found ({business.emails.length})</h4>
                             <div className="space-y-1">
                               {business.emails.map((email, i) => (
-                                <div key={i} className="text-sm flex items-center gap-2">
-                                  <a href={`mailto:${email.address}`} className="text-blue-600 hover:underline">
+                                <div key={i} className="text-sm flex items-center justify-between gap-2">
+                                  <a href={`mailto:${email.address}`} className="text-blue-600 hover:underline truncate">
                                     {email.address}
                                   </a>
-                                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                  <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
                                     email.type === 'personal' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
                                   }`}>
                                     {email.type}
                                   </span>
-                                  <span className="text-xs text-gray-400">from {email.source || 'homepage'}</span>
                                 </div>
                               ))}
                             </div>
@@ -974,60 +1122,60 @@ export default function Home() {
 
                         {/* SIC Codes */}
                         {business.sicCodes && business.sicCodes.length > 0 && (
-                          <div>
-                            <h4 className="font-medium text-gray-900 mb-2">Industry Codes (SIC)</h4>
+                          <div className="bg-white p-3 rounded-lg border border-gray-200">
+                            <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">📊 Industry Codes (SIC)</h4>
                             <div className="space-y-1">
                               {business.sicCodes.map((sic, i) => (
                                 <div key={i} className="text-sm">
-                                  <span className="font-mono text-gray-500">{sic.code}</span>
-                                  <span className="text-gray-700"> - {sic.description}</span>
+                                  <span className="font-mono text-gray-500 text-xs">{sic.code}</span>
+                                  <span className="text-gray-700 ml-2">{sic.description}</span>
                                 </div>
                               ))}
                             </div>
                           </div>
                         )}
 
-                        {/* Registered Address */}
-                        {business.registeredAddress && (
-                          <div>
-                            <h4 className="font-medium text-gray-900 mb-2">Registered Office</h4>
-                            <p className="text-sm text-gray-600">{business.registeredAddress}</p>
-                          </div>
-                        )}
-
-                        {/* Score Breakdown */}
-                        {business.scoreBreakdown && (
-                          <div>
-                            <h4 className="font-medium text-gray-900 mb-2">Lead Score Breakdown</h4>
-                            <div className="grid grid-cols-2 gap-1 text-xs">
-                              {business.scoreBreakdown.noWebsite > 0 && (
-                                <div className="text-orange-600">No website: +{business.scoreBreakdown.noWebsite}</div>
+                        {/* Social Media */}
+                        {business.socialMedia && Object.values(business.socialMedia).some(Boolean) && (
+                          <div className="bg-white p-3 rounded-lg border border-gray-200">
+                            <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">📱 Social Media</h4>
+                            <div className="flex flex-wrap gap-2">
+                              {business.socialMedia.linkedin && (
+                                <a href={business.socialMedia.linkedin} target="_blank" rel="noopener noreferrer"
+                                   className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200">
+                                  LinkedIn
+                                </a>
                               )}
-                              {business.scoreBreakdown.noEmail > 0 && (
-                                <div className="text-orange-600">No email: +{business.scoreBreakdown.noEmail}</div>
+                              {business.socialMedia.facebook && (
+                                <a href={business.socialMedia.facebook} target="_blank" rel="noopener noreferrer"
+                                   className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200">
+                                  Facebook
+                                </a>
                               )}
-                              {business.scoreBreakdown.genericEmailOnly > 0 && (
-                                <div className="text-orange-600">Generic email only: +{business.scoreBreakdown.genericEmailOnly}</div>
+                              {business.socialMedia.twitter && (
+                                <a href={business.socialMedia.twitter} target="_blank" rel="noopener noreferrer"
+                                   className="px-2 py-1 bg-sky-100 text-sky-700 rounded text-xs hover:bg-sky-200">
+                                  Twitter/X
+                                </a>
                               )}
-                              {business.scoreBreakdown.lowReviews > 0 && (
-                                <div className="text-orange-600">Low reviews: +{business.scoreBreakdown.lowReviews}</div>
-                              )}
-                              {business.scoreBreakdown.noSocial > 0 && (
-                                <div className="text-orange-600">No social media: +{business.scoreBreakdown.noSocial}</div>
-                              )}
-                              {business.scoreBreakdown.establishedBusiness > 0 && (
-                                <div className="text-green-600">Established business: +{business.scoreBreakdown.establishedBusiness}</div>
-                              )}
-                              {business.scoreBreakdown.hasDirectors > 0 && (
-                                <div className="text-green-600">Directors identified: +{business.scoreBreakdown.hasDirectors}</div>
-                              )}
-                              {business.scoreBreakdown.soleTrader > 0 && (
-                                <div className="text-blue-600">Sole trader: +{business.scoreBreakdown.soleTrader}</div>
+                              {business.socialMedia.instagram && (
+                                <a href={business.socialMedia.instagram} target="_blank" rel="noopener noreferrer"
+                                   className="px-2 py-1 bg-pink-100 text-pink-700 rounded text-xs hover:bg-pink-200">
+                                  Instagram
+                                </a>
                               )}
                             </div>
                           </div>
                         )}
                       </div>
+
+                      {/* Registered Address if different */}
+                      {business.registeredAddress && business.registeredAddress !== business.address && (
+                        <div className="mt-4 bg-white p-3 rounded-lg border border-gray-200">
+                          <h4 className="font-semibold text-gray-900 mb-1 text-sm">🏛️ Registered Office Address</h4>
+                          <p className="text-sm text-gray-600">{business.registeredAddress}</p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
