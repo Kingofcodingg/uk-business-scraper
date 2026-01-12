@@ -630,11 +630,22 @@ export async function searchDirectorOnLinkedIn(
 ): Promise<LinkedInProfile | null> {
   console.log(`[LinkedIn] Searching for director: ${directorName} at ${companyName}`);
 
-  // Clean names for searching
-  const cleanDirectorName = directorName
+  // Clean names for searching - handle "LASTNAME, Firstname" format from Companies House
+  let cleanDirectorName = directorName
     .replace(/\b(Mr|Mrs|Ms|Miss|Dr|Prof|Sir|Dame)\b\.?/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+  // Handle "POTTS, Graham Robert" -> "Graham Robert Potts" format
+  if (cleanDirectorName.includes(',')) {
+    const parts = cleanDirectorName.split(',').map(p => p.trim());
+    if (parts.length === 2) {
+      // Swap to "Firstname Lastname" format and normalize case
+      const lastName = parts[0].charAt(0).toUpperCase() + parts[0].slice(1).toLowerCase();
+      const firstName = parts[1];
+      cleanDirectorName = `${firstName} ${lastName}`;
+    }
+  }
 
   const cleanCompanyName = companyName
     .replace(/\b(ltd|limited|plc|llp|inc|corp|uk)\b\.?/gi, '')
@@ -642,23 +653,38 @@ export async function searchDirectorOnLinkedIn(
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Build targeted queries for this specific person
+  // Extract just the first name and last name for simpler searches
+  const nameParts = cleanDirectorName.split(' ').filter(p => p.length > 1);
+  const firstName = nameParts[0] || '';
+  const lastName = nameParts[nameParts.length - 1] || '';
+  const shortName = `${firstName} ${lastName}`;
+
+  // Build targeted queries for this specific person - more variations
   const queries = [
+    // Full name + company
     `site:linkedin.com/in "${cleanDirectorName}" "${cleanCompanyName}"`,
-    `site:linkedin.com/in "${cleanDirectorName}" director ${cleanCompanyName}`,
-    `linkedin.com/in "${cleanDirectorName}" ${cleanCompanyName}`,
+    // Short name + company
+    `site:linkedin.com/in "${shortName}" "${cleanCompanyName}"`,
+    // Just name with director title
+    `site:linkedin.com/in "${cleanDirectorName}" director`,
+    `site:linkedin.com/in "${shortName}" director UK`,
+    // Name only searches
+    `linkedin.com/in "${cleanDirectorName}"`,
+    `linkedin.com/in "${shortName}"`,
   ];
 
   // Add location-specific query if available
   if (location) {
     const locationClean = location.replace(/[^a-zA-Z\s]/g, ' ').trim().split(/\s+/)[0];
     if (locationClean && locationClean.length > 2) {
-      queries.unshift(`site:linkedin.com/in "${cleanDirectorName}" "${locationClean}"`);
+      queries.unshift(`site:linkedin.com/in "${shortName}" "${locationClean}"`);
     }
   }
 
-  for (const query of queries) {
+  for (const query of queries.slice(0, 5)) { // Try up to 5 queries
     try {
+      console.log(`[LinkedIn] Trying query: ${query}`);
+
       // Try Brave first (most reliable)
       let profiles = await searchBraveForLinkedIn(query);
 
@@ -668,18 +694,31 @@ export async function searchDirectorOnLinkedIn(
         profiles = await searchBingForLinkedIn(query);
       }
 
+      // Fallback to DuckDuckGo
+      if (profiles.length === 0) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+        profiles = await searchDuckDuckGoForLinkedIn(query);
+      }
+
       // Find best match for this director
       for (const profile of profiles) {
         if (profile.type === 'personal') {
           const profileName = (profile.name || '').toLowerCase();
-          const searchName = cleanDirectorName.toLowerCase();
+          const searchNameLower = cleanDirectorName.toLowerCase();
+          const shortNameLower = shortName.toLowerCase();
 
           // Check if names match reasonably
-          const searchParts = searchName.split(' ').filter(p => p.length > 2);
+          const searchParts = searchNameLower.split(' ').filter(p => p.length > 2);
           const matchCount = searchParts.filter(part => profileName.includes(part)).length;
 
-          // At least 2 name parts should match (e.g., first and last name)
-          if (matchCount >= 2 || profileName.includes(searchName)) {
+          // Also check short name parts
+          const shortParts = shortNameLower.split(' ').filter(p => p.length > 2);
+          const shortMatchCount = shortParts.filter(part => profileName.includes(part)).length;
+
+          // Match if: 2+ name parts match, or both first and last name match, or contains full name
+          if (matchCount >= 2 || shortMatchCount >= 2 ||
+              profileName.includes(searchNameLower) || profileName.includes(shortNameLower) ||
+              (profileName.includes(firstName.toLowerCase()) && profileName.includes(lastName.toLowerCase()))) {
             console.log(`[LinkedIn] Found profile for ${directorName}: ${profile.url}`);
             return profile;
           }
