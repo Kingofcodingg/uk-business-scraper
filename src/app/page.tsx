@@ -24,23 +24,159 @@ interface SearchParams {
   maxPages: number;
 }
 
-const BUSINESS_TYPES = [
-  "Plumber",
-  "Electrician",
-  "Restaurant",
-  "Accountant",
-  "Solicitor",
-  "Builder",
-  "Locksmith",
-  "Dentist",
-  "Garage",
-  "Estate Agent",
-  "Hairdresser",
-  "Painter",
-  "Roofer",
-  "Florist",
-  "Photographer",
-];
+const BUSINESS_CATEGORIES = {
+  "Professional Services": [
+    "Accountant",
+    "Solicitor",
+    "Architect",
+    "Surveyor",
+    "Financial Advisor",
+    "Insurance Broker",
+    "Management Consultant",
+    "HR Consultant",
+    "Recruitment Agency",
+  ],
+  "Technology & Software": [
+    "Software Company",
+    "IT Services",
+    "Web Developer",
+    "App Developer",
+    "Cyber Security",
+    "Cloud Services",
+    "Data Analytics",
+    "Tech Startup",
+  ],
+  "Corporate & Business": [
+    "Corporate Services",
+    "Business Consultant",
+    "Investment Company",
+    "Private Equity",
+    "Venture Capital",
+    "Holding Company",
+    "Trading Company",
+    "Import Export",
+  ],
+  "Marine & Boats": [
+    "Yacht Broker",
+    "Boat Sales",
+    "Marina",
+    "Yacht Charter",
+    "Boat Repair",
+    "Marine Services",
+    "Sailing School",
+    "Boat Storage",
+  ],
+  "Construction & Property": [
+    "Builder",
+    "Construction Company",
+    "Property Developer",
+    "Estate Agent",
+    "Surveyor",
+    "Interior Designer",
+    "Landscape Architect",
+    "Civil Engineer",
+  ],
+  "Manufacturing & Industrial": [
+    "Manufacturer",
+    "Engineering Company",
+    "Factory",
+    "Industrial Supplier",
+    "Machinery",
+    "Metal Fabrication",
+    "Plastics",
+    "Electronics Manufacturer",
+  ],
+  "Healthcare & Medical": [
+    "Private Hospital",
+    "Medical Clinic",
+    "Dentist",
+    "Physiotherapist",
+    "Veterinarian",
+    "Care Home",
+    "Pharmacy",
+    "Medical Equipment",
+  ],
+  "Hospitality & Leisure": [
+    "Hotel",
+    "Restaurant",
+    "Catering",
+    "Event Venue",
+    "Golf Club",
+    "Spa",
+    "Gym",
+    "Travel Agency",
+  ],
+  "Automotive": [
+    "Car Dealer",
+    "Garage",
+    "Car Rental",
+    "Auto Parts",
+    "Car Wash",
+    "MOT Centre",
+    "Tyre Shop",
+    "Vehicle Leasing",
+  ],
+  "Trades & Home Services": [
+    "Plumber",
+    "Electrician",
+    "Roofer",
+    "Painter",
+    "Locksmith",
+    "Carpet Cleaner",
+    "Window Cleaner",
+    "Gardener",
+  ],
+  "Creative & Media": [
+    "Photographer",
+    "Video Production",
+    "Marketing Agency",
+    "PR Agency",
+    "Graphic Designer",
+    "Printing Company",
+    "Advertising Agency",
+    "Branding Agency",
+  ],
+  "Retail & Wholesale": [
+    "Wholesaler",
+    "Distributor",
+    "Retail Store",
+    "E-commerce",
+    "Fashion Retailer",
+    "Furniture Store",
+    "Electronics Retailer",
+    "Florist",
+  ],
+  "Education & Training": [
+    "Private School",
+    "Training Provider",
+    "Tutoring",
+    "Language School",
+    "Driving School",
+    "Music School",
+    "Dance School",
+    "Nursery",
+  ],
+  "Energy & Utilities": [
+    "Solar Panel Installer",
+    "Electrician",
+    "Gas Engineer",
+    "Renewable Energy",
+    "EV Charging",
+    "Energy Consultant",
+    "Waste Management",
+    "Recycling",
+  ],
+  "Agriculture & Farming": [
+    "Farm",
+    "Agricultural Supplier",
+    "Garden Centre",
+    "Landscaping",
+    "Tree Surgeon",
+    "Pest Control",
+    "Equestrian",
+    "Veterinarian",
+  ],
+};
 
 const RADIUS_OPTIONS = [
   { value: "1", label: "1 mile" },
@@ -207,10 +343,14 @@ export default function Home() {
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               <option value="">Select a business type...</option>
-              {BUSINESS_TYPES.map((type) => (
-                <option key={type} value={type.toLowerCase()}>
-                  {type}
-                </option>
+              {Object.entries(BUSINESS_CATEGORIES).map(([category, types]) => (
+                <optgroup key={category} label={category}>
+                  {types.map((type: string) => (
+                    <option key={type} value={type.toLowerCase()}>
+                      {type}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
             <div className="mt-2">
@@ -296,12 +436,12 @@ export default function Home() {
         {/* Max Pages */}
         <div className="mt-6">
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            Pages per Source: {searchParams.maxPages}
+            Pages per Source: {searchParams.maxPages} (~{searchParams.maxPages * 20} results per source)
           </label>
           <input
             type="range"
             min="1"
-            max="5"
+            max="15"
             value={searchParams.maxPages}
             onChange={(e) =>
               setSearchParams((prev) => ({
@@ -313,7 +453,7 @@ export default function Home() {
           />
           <div className="flex justify-between text-xs text-gray-500">
             <span>1 (faster)</span>
-            <span>5 (more results)</span>
+            <span>15 (maximum results)</span>
           </div>
         </div>
 

@@ -32,7 +32,7 @@ function extractPhones(text: string): string[] {
     const matches = text.match(pattern);
     if (matches) phones.push(...matches);
   }
-  return [...new Set(phones)];
+  return Array.from(new Set(phones));
 }
 
 // Clean text
@@ -292,7 +292,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const maxPages = Math.min(max_pages, 5);
+    const maxPages = Math.min(max_pages, 15);
     let allBusinesses: Business[] = [];
 
     // Run scrapers based on selected sources
