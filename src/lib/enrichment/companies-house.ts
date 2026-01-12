@@ -155,33 +155,169 @@ function mapCompanyStatus(status: string): CompaniesHouseData['companyStatus'] {
   return 'active';
 }
 
+// Common UK business suffixes to normalize
+const BUSINESS_SUFFIXES = [
+  'limited', 'ltd', 'llp', 'plc', 'inc', 'corp', 'company', 'co',
+  'uk', 'holdings', 'group', 'services', 'solutions', 'international',
+  '& co', 'and co', '& sons', 'and sons', '& partners', 'and partners',
+];
+
 /**
- * Calculate name similarity score using Levenshtein distance
+ * Normalize company name for comparison
  */
-function calculateSimilarity(str1: string, str2: string): number {
-  const s1 = str1.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const s2 = str2.toLowerCase().replace(/[^a-z0-9]/g, '');
+function normalizeCompanyName(name: string): string {
+  let normalized = name.toLowerCase().trim();
 
-  if (s1 === s2) return 1;
-  if (s1.length === 0 || s2.length === 0) return 0;
+  // Remove punctuation except spaces
+  normalized = normalized.replace(/[^\w\s]/g, ' ');
 
-  // Check if one contains the other
-  if (s1.includes(s2) || s2.includes(s1)) {
-    return 0.9;
+  // Remove common suffixes
+  for (const suffix of BUSINESS_SUFFIXES) {
+    const pattern = new RegExp(`\\b${suffix}\\b`, 'gi');
+    normalized = normalized.replace(pattern, '');
   }
 
-  // Simple word overlap check
-  const words1 = new Set(s1.split(/\s+/));
-  const words2 = new Set(s2.split(/\s+/));
-  let overlap = 0;
-  for (const word of words1) {
-    if (words2.has(word)) overlap++;
-  }
-  return overlap / Math.max(words1.size, words2.size);
+  // Normalize whitespace
+  normalized = normalized.replace(/\s+/g, ' ').trim();
+
+  return normalized;
 }
 
 /**
- * Search Companies House for a company
+ * Calculate Levenshtein distance between two strings
+ */
+function levenshteinDistance(str1: string, str2: string): number {
+  const m = str1.length;
+  const n = str2.length;
+
+  // Create matrix
+  const dp: number[][] = Array(m + 1).fill(null).map(() => Array(n + 1).fill(0));
+
+  // Initialize first row and column
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+
+  // Fill matrix
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (str1[i - 1] === str2[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1];
+      } else {
+        dp[i][j] = 1 + Math.min(
+          dp[i - 1][j],     // deletion
+          dp[i][j - 1],     // insertion
+          dp[i - 1][j - 1]  // substitution
+        );
+      }
+    }
+  }
+
+  return dp[m][n];
+}
+
+/**
+ * Calculate word overlap score
+ */
+function wordOverlapScore(str1: string, str2: string): number {
+  const words1 = new Set(str1.split(/\s+/).filter(w => w.length > 1));
+  const words2 = new Set(str2.split(/\s+/).filter(w => w.length > 1));
+
+  if (words1.size === 0 || words2.size === 0) return 0;
+
+  let matches = 0;
+  for (const word of words1) {
+    if (words2.has(word)) {
+      matches++;
+    } else {
+      // Partial match check
+      for (const word2 of words2) {
+        if (word.includes(word2) || word2.includes(word)) {
+          matches += 0.5;
+          break;
+        }
+      }
+    }
+  }
+
+  return matches / Math.max(words1.size, words2.size);
+}
+
+/**
+ * Calculate comprehensive name similarity score
+ * Returns a value between 0 (no match) and 1 (perfect match)
+ */
+function calculateSimilarity(str1: string, str2: string): number {
+  // Normalize both strings
+  const n1 = normalizeCompanyName(str1);
+  const n2 = normalizeCompanyName(str2);
+
+  // Exact match after normalization
+  if (n1 === n2) return 1.0;
+
+  // Empty check
+  if (n1.length === 0 || n2.length === 0) return 0;
+
+  // One contains the other
+  if (n1.includes(n2)) {
+    return 0.9 + (0.1 * n2.length / n1.length);
+  }
+  if (n2.includes(n1)) {
+    return 0.9 + (0.1 * n1.length / n2.length);
+  }
+
+  // Calculate Levenshtein-based similarity
+  const maxLen = Math.max(n1.length, n2.length);
+  const distance = levenshteinDistance(n1, n2);
+  const levenshteinSim = 1 - (distance / maxLen);
+
+  // Calculate word overlap similarity
+  const wordSim = wordOverlapScore(n1, n2);
+
+  // Combine scores (word overlap is often more meaningful for company names)
+  const combinedScore = (levenshteinSim * 0.4) + (wordSim * 0.6);
+
+  return combinedScore;
+}
+
+/**
+ * Generate search variations for better matching
+ */
+function generateSearchVariations(businessName: string): string[] {
+  const variations: string[] = [businessName];
+  const normalized = normalizeCompanyName(businessName);
+
+  // Add the normalized version
+  if (normalized !== businessName.toLowerCase()) {
+    variations.push(normalized);
+  }
+
+  // Try removing "The" prefix
+  if (businessName.toLowerCase().startsWith('the ')) {
+    variations.push(businessName.substring(4));
+  }
+
+  // Try first word only (for cases like "John's Plumbing" -> "Johns Plumbing Ltd")
+  const firstWord = normalized.split(/\s+/)[0];
+  if (firstWord && firstWord.length >= 4) {
+    variations.push(firstWord);
+  }
+
+  // Remove possessives
+  const withoutPossessive = businessName.replace(/'s?\s/g, ' ');
+  if (withoutPossessive !== businessName) {
+    variations.push(withoutPossessive);
+  }
+
+  return [...new Set(variations)];
+}
+
+/**
+ * Minimum similarity threshold for a valid match
+ */
+const MIN_SIMILARITY_THRESHOLD = 0.5;
+
+/**
+ * Search Companies House for a company with fuzzy matching
  */
 export async function searchCompaniesHouse(
   businessName: string,
@@ -195,68 +331,130 @@ export async function searchCompaniesHouse(
     return null;
   }
 
-  try {
-    // Search for company by name
-    const searchUrl = `https://api.company-information.service.gov.uk/search/companies?q=${encodeURIComponent(businessName)}&items_per_page=10`;
+  console.log(`[CompaniesHouse] Searching for: ${businessName}`);
 
-    console.log(`[CompaniesHouse] Searching for: ${businessName}`);
+  // Generate search variations for better matching
+  const searchVariations = generateSearchVariations(businessName);
+  console.log(`[CompaniesHouse] Trying ${searchVariations.length} search variations`);
 
-    const searchResponse = await fetch(searchUrl, {
-      headers: {
-        "Authorization": `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
-        "Accept": "application/json",
-      },
-    });
+  // Collect all results from all variations
+  const allItems: Array<{ item: Record<string, unknown>; searchTerm: string }> = [];
 
-    if (!searchResponse.ok) {
-      const status = searchResponse.status;
-      if (status === 401) {
-        console.log("[CompaniesHouse] Invalid API key - check your COMPANIES_HOUSE_API_KEY");
-      } else if (status === 429) {
-        console.log("[CompaniesHouse] Rate limited - wait before retrying");
-      } else {
-        console.log(`[CompaniesHouse] Search failed: ${status}`);
+  for (const searchTerm of searchVariations.slice(0, 3)) { // Limit to 3 variations
+    try {
+      const searchUrl = `https://api.company-information.service.gov.uk/search/companies?q=${encodeURIComponent(searchTerm)}&items_per_page=10`;
+
+      const searchResponse = await fetch(searchUrl, {
+        headers: {
+          "Authorization": `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
+          "Accept": "application/json",
+        },
+      });
+
+      if (!searchResponse.ok) {
+        const status = searchResponse.status;
+        if (status === 401) {
+          console.log("[CompaniesHouse] Invalid API key - check your COMPANIES_HOUSE_API_KEY");
+          return null;
+        } else if (status === 429) {
+          console.log("[CompaniesHouse] Rate limited - waiting...");
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          continue;
+        }
+        continue;
       }
-      return null;
-    }
 
-    const searchData = await searchResponse.json();
+      const searchData = await searchResponse.json();
 
-    if (!searchData.items || searchData.items.length === 0) {
-      console.log(`[CompaniesHouse] No results for: ${businessName}`);
-      return null;
-    }
-
-    // Find best match
-    let bestMatch = searchData.items[0];
-    let bestScore = 0;
-
-    for (const item of searchData.items) {
-      let score = calculateSimilarity(businessName, item.title || '');
-
-      // Bonus for matching postcode
-      if (postcode) {
-        const postcodePrefix = postcode.toUpperCase().replace(/\s+/g, '').substring(0, 3);
-        const itemPostcode = item.address?.postal_code?.toUpperCase().replace(/\s+/g, '') || '';
-        if (itemPostcode.startsWith(postcodePrefix)) {
-          score += 0.3;
+      if (searchData.items && searchData.items.length > 0) {
+        for (const item of searchData.items) {
+          allItems.push({ item, searchTerm });
         }
       }
 
-      // Bonus for active status
-      if (item.company_status === 'active') {
-        score += 0.1;
+      // Small delay between requests
+      if (searchVariations.length > 1) {
+        await new Promise(resolve => setTimeout(resolve, 200));
       }
+    } catch (error) {
+      console.log(`[CompaniesHouse] Search variation failed:`, error);
+    }
+  }
 
-      if (score > bestScore) {
-        bestScore = score;
-        bestMatch = item;
+  if (allItems.length === 0) {
+    console.log(`[CompaniesHouse] No results for: ${businessName}`);
+    return null;
+  }
+
+  // Deduplicate by company number
+  const uniqueItems = new Map<string, Record<string, unknown>>();
+  for (const { item } of allItems) {
+    const companyNumber = item.company_number as string;
+    if (!uniqueItems.has(companyNumber)) {
+      uniqueItems.set(companyNumber, item);
+    }
+  }
+
+  console.log(`[CompaniesHouse] Found ${uniqueItems.size} unique companies`);
+
+  // Find best match with fuzzy scoring
+  let bestMatch: Record<string, unknown> | null = null;
+  let bestScore = 0;
+
+  for (const item of uniqueItems.values()) {
+    const title = (item.title as string) || '';
+    let score = calculateSimilarity(businessName, title);
+
+    // Bonus for matching postcode (strong signal)
+    if (postcode) {
+      const postcodePrefix = postcode.toUpperCase().replace(/\s+/g, '').substring(0, 4);
+      const itemAddress = item.address as Record<string, string> | undefined;
+      const itemPostcode = itemAddress?.postal_code?.toUpperCase().replace(/\s+/g, '') || '';
+
+      if (itemPostcode === postcode.toUpperCase().replace(/\s+/g, '')) {
+        score += 0.4; // Exact postcode match
+      } else if (itemPostcode.startsWith(postcodePrefix)) {
+        score += 0.25; // Outward code match
+      } else if (itemPostcode.substring(0, 2) === postcodePrefix.substring(0, 2)) {
+        score += 0.1; // Area match
       }
     }
 
-    const companyNumber = bestMatch.company_number;
-    console.log(`[CompaniesHouse] Found: ${bestMatch.title} (${companyNumber}) - score: ${bestScore.toFixed(2)}`);
+    // Bonus for active status
+    if (item.company_status === 'active') {
+      score += 0.1;
+    }
 
+    // Penalty for dissolved companies
+    if ((item.company_status as string)?.includes('dissolved')) {
+      score -= 0.2;
+    }
+
+    // Penalty for very old dissolutions
+    const dissolvedDate = item.date_of_cessation as string | undefined;
+    if (dissolvedDate) {
+      const years = (Date.now() - new Date(dissolvedDate).getTime()) / (1000 * 60 * 60 * 24 * 365);
+      if (years > 5) {
+        score -= 0.3;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = item;
+    }
+  }
+
+  // Check if match meets minimum threshold
+  if (!bestMatch || bestScore < MIN_SIMILARITY_THRESHOLD) {
+    console.log(`[CompaniesHouse] No good match found (best score: ${bestScore.toFixed(2)} < ${MIN_SIMILARITY_THRESHOLD})`);
+    return null;
+  }
+
+  const companyNumber = bestMatch.company_number as string;
+  console.log(`[CompaniesHouse] Best match: ${bestMatch.title} (${companyNumber}) - score: ${bestScore.toFixed(2)}`);
+
+  try {
     // Get full company profile
     const profileUrl = `https://api.company-information.service.gov.uk/company/${companyNumber}`;
     const profileResponse = await fetch(profileUrl, {
@@ -319,12 +517,12 @@ export async function searchCompaniesHouse(
 
     return {
       companyNumber,
-      companyName: (profileData?.company_name as string) || bestMatch.title,
-      companyStatus: mapCompanyStatus((profileData?.company_status as string) || bestMatch.company_status),
-      companyType: (profileData?.type as string) || bestMatch.company_type || '',
-      incorporationDate: (profileData?.date_of_creation as string) || bestMatch.date_of_creation || '',
+      companyName: (profileData?.company_name as string) || (bestMatch.title as string),
+      companyStatus: mapCompanyStatus((profileData?.company_status as string) || (bestMatch.company_status as string)),
+      companyType: (profileData?.type as string) || (bestMatch.company_type as string) || '',
+      incorporationDate: (profileData?.date_of_creation as string) || (bestMatch.date_of_creation as string) || '',
       registeredAddress: formatAddress(
-        (profileData?.registered_office_address as Record<string, string>) || bestMatch.address
+        (profileData?.registered_office_address as Record<string, string>) || (bestMatch.address as Record<string, string>)
       ),
       sicCodes,
       directors,

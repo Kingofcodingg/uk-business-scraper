@@ -5,7 +5,7 @@
 export interface EmailInfo {
   address: string;
   type: 'personal' | 'generic';
-  source: 'crawled' | 'guessed' | 'directory' | 'verified';
+  source: 'crawled' | 'guessed' | 'directory' | 'verified' | 'mailto' | 'deobfuscated' | 'data-attr' | 'cloudflare-decoded' | 'schema-org' | 'javascript' | 'js-concat' | 'google-dork' | 'whois' | 'archive';
   personName?: string;
   verified: boolean;
   verificationMethod?: 'mx' | 'smtp' | 'pattern-match' | 'found-on-site';
@@ -34,7 +34,7 @@ export interface PersonInfo {
   firstName: string;
   lastName: string;
   role: string;
-  source: 'companies-house' | 'website' | 'linkedin';
+  source: 'companies-house' | 'website' | 'linkedin' | 'whois' | 'google-dork';
   appointedDate?: string;
   emails: EmailInfo[];
   linkedin?: string;
@@ -49,6 +49,7 @@ export interface SocialMedia {
   instagram?: string;
   youtube?: string;
   tiktok?: string;
+  pinterest?: string;
 }
 
 export interface Director {

@@ -1,6 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useMemo } from "react";
+
+// ============================================================================
+// TYPE DEFINITIONS
+// ============================================================================
 
 interface Director {
   name: string;
@@ -18,13 +22,26 @@ interface EmailInfo {
   address: string;
   type: 'generic' | 'personal';
   source: string;
+  confidence?: 'high' | 'medium' | 'low';
+  verified?: boolean;
+}
+
+interface PersonInfo {
+  name: string;
+  role: string;
+  email?: string;
+  linkedin?: string;
 }
 
 interface SocialMedia {
   linkedin?: string;
+  linkedinType?: 'company' | 'personal';
   facebook?: string;
   twitter?: string;
   instagram?: string;
+  youtube?: string;
+  tiktok?: string;
+  pinterest?: string;
 }
 
 interface ScoreBreakdown {
@@ -53,7 +70,6 @@ interface Business {
   lead_score: number;
   lead_signals: string[];
   distance?: string;
-  // Enriched fields
   companyNumber?: string;
   companyStatus?: string;
   companyType?: string;
@@ -62,6 +78,8 @@ interface Business {
   sicCodes?: SicCode[];
   directors?: Director[];
   emails?: EmailInfo[];
+  phones?: { number: string; type: string }[];
+  people?: PersonInfo[];
   socialMedia?: SocialMedia;
   scoreBreakdown?: ScoreBreakdown;
   enriched?: boolean;
@@ -76,167 +94,74 @@ interface SearchParams {
   maxPages: number;
 }
 
-const BUSINESS_CATEGORIES = {
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const BUSINESS_CATEGORIES: Record<string, string[]> = {
   "Professional Services": [
-    "Accountant",
-    "Solicitor",
-    "Architect",
-    "Surveyor",
-    "Financial Advisor",
-    "Insurance Broker",
-    "Management Consultant",
-    "HR Consultant",
-    "Recruitment Agency",
+    "Accountant", "Solicitor", "Architect", "Surveyor", "Financial Advisor",
+    "Insurance Broker", "Management Consultant", "HR Consultant", "Recruitment Agency",
   ],
   "Technology & Software": [
-    "Software Company",
-    "IT Services",
-    "Web Developer",
-    "App Developer",
-    "Cyber Security",
-    "Cloud Services",
-    "Data Analytics",
-    "Tech Startup",
+    "Software Company", "IT Services", "Web Developer", "App Developer",
+    "Cyber Security", "Cloud Services", "Data Analytics", "Tech Startup",
   ],
   "Corporate & Business": [
-    "Corporate Services",
-    "Business Consultant",
-    "Investment Company",
-    "Private Equity",
-    "Venture Capital",
-    "Holding Company",
-    "Trading Company",
-    "Import Export",
+    "Corporate Services", "Business Consultant", "Investment Company", "Private Equity",
+    "Venture Capital", "Holding Company", "Trading Company", "Import Export",
   ],
   "Marine & Boats": [
-    "Yacht Broker",
-    "Boat Sales",
-    "Marina",
-    "Yacht Charter",
-    "Boat Repair",
-    "Marine Services",
-    "Sailing School",
-    "Boat Storage",
+    "Yacht Broker", "Boat Sales", "Marina", "Yacht Charter",
+    "Boat Repair", "Marine Services", "Sailing School", "Boat Storage",
   ],
   "Construction & Property": [
-    "Builder",
-    "Construction Company",
-    "Property Developer",
-    "Estate Agent",
-    "Surveyor",
-    "Interior Designer",
-    "Landscape Architect",
-    "Civil Engineer",
+    "Builder", "Construction Company", "Property Developer", "Estate Agent",
+    "Surveyor", "Interior Designer", "Landscape Architect", "Civil Engineer",
   ],
   "Manufacturing & Industrial": [
-    "Manufacturer",
-    "Engineering Company",
-    "Factory",
-    "Industrial Supplier",
-    "Machinery",
-    "Metal Fabrication",
-    "Plastics",
-    "Electronics Manufacturer",
+    "Manufacturer", "Engineering Company", "Factory", "Industrial Supplier",
+    "Machinery", "Metal Fabrication", "Plastics", "Electronics Manufacturer",
   ],
   "Healthcare & Medical": [
-    "Private Hospital",
-    "Medical Clinic",
-    "Dentist",
-    "Physiotherapist",
-    "Veterinarian",
-    "Care Home",
-    "Pharmacy",
-    "Medical Equipment",
+    "Private Hospital", "Medical Clinic", "Dentist", "Physiotherapist",
+    "Veterinarian", "Care Home", "Pharmacy", "Medical Equipment",
   ],
   "Hospitality & Leisure": [
-    "Hotel",
-    "Restaurant",
-    "Catering",
-    "Event Venue",
-    "Golf Club",
-    "Spa",
-    "Gym",
-    "Travel Agency",
+    "Hotel", "Restaurant", "Catering", "Event Venue",
+    "Golf Club", "Spa", "Gym", "Travel Agency",
   ],
   "Automotive": [
-    "Car Dealer",
-    "Garage",
-    "Car Rental",
-    "Auto Parts",
-    "Car Wash",
-    "MOT Centre",
-    "Tyre Shop",
-    "Vehicle Leasing",
+    "Car Dealer", "Garage", "Car Rental", "Auto Parts",
+    "Car Wash", "MOT Centre", "Tyre Shop", "Vehicle Leasing",
   ],
   "Trades & Home Services": [
-    "Plumber",
-    "Electrician",
-    "Roofer",
-    "Painter",
-    "Locksmith",
-    "Carpet Cleaner",
-    "Window Cleaner",
-    "Gardener",
+    "Plumber", "Electrician", "Roofer", "Painter",
+    "Locksmith", "Carpet Cleaner", "Window Cleaner", "Gardener",
   ],
   "Creative & Media": [
-    "Photographer",
-    "Video Production",
-    "Marketing Agency",
-    "PR Agency",
-    "Graphic Designer",
-    "Printing Company",
-    "Advertising Agency",
-    "Branding Agency",
+    "Photographer", "Video Production", "Marketing Agency", "PR Agency",
+    "Graphic Designer", "Printing Company", "Advertising Agency", "Branding Agency",
   ],
   "Retail & Wholesale": [
-    "Wholesaler",
-    "Distributor",
-    "Retail Store",
-    "E-commerce",
-    "Fashion Retailer",
-    "Furniture Store",
-    "Electronics Retailer",
-    "Florist",
+    "Wholesaler", "Distributor", "Retail Store", "E-commerce",
+    "Fashion Retailer", "Furniture Store", "Electronics Retailer", "Florist",
   ],
   "Education & Training": [
-    "Private School",
-    "Training Provider",
-    "Tutoring",
-    "Language School",
-    "Driving School",
-    "Music School",
-    "Dance School",
-    "Nursery",
+    "Private School", "Training Provider", "Tutoring", "Language School",
+    "Driving School", "Music School", "Dance School", "Nursery",
   ],
   "Energy & Utilities": [
-    "Solar Panel Installer",
-    "Electrician",
-    "Gas Engineer",
-    "Renewable Energy",
-    "EV Charging",
-    "Energy Consultant",
-    "Waste Management",
-    "Recycling",
+    "Solar Panel Installer", "Electrician", "Gas Engineer", "Renewable Energy",
+    "EV Charging", "Energy Consultant", "Waste Management", "Recycling",
   ],
   "Agriculture & Farming": [
-    "Farm",
-    "Agricultural Supplier",
-    "Garden Centre",
-    "Landscaping",
-    "Tree Surgeon",
-    "Pest Control",
-    "Equestrian",
-    "Veterinarian",
+    "Farm", "Agricultural Supplier", "Garden Centre", "Landscaping",
+    "Tree Surgeon", "Pest Control", "Equestrian", "Veterinarian",
   ],
   "Commercial Property": [
-    "Industrial Estate",
-    "Business Park",
-    "Office Space",
-    "Warehouse",
-    "Commercial Unit",
-    "Retail Unit",
-    "Factory Unit",
-    "Distribution Centre",
+    "Industrial Estate", "Business Park", "Office Space", "Warehouse",
+    "Commercial Unit", "Retail Unit", "Factory Unit", "Distribution Centre",
   ],
 };
 
@@ -264,7 +189,534 @@ const DATA_SOURCES = [
 
 const ALL_SOURCES = DATA_SOURCES.map(s => s.id);
 
+// ============================================================================
+// COMPONENTS
+// ============================================================================
+
+// Loading Spinner
+const Spinner = () => (
+  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+  </svg>
+);
+
+// Badge Component
+const Badge = ({ children, variant = 'default', size = 'sm' }: { children: React.ReactNode; variant?: string; size?: string }) => {
+  const variants: Record<string, string> = {
+    default: 'bg-gray-100 text-gray-700',
+    success: 'bg-emerald-100 text-emerald-700',
+    warning: 'bg-amber-100 text-amber-700',
+    danger: 'bg-red-100 text-red-700',
+    info: 'bg-sky-100 text-sky-700',
+    purple: 'bg-violet-100 text-violet-700',
+    hot: 'bg-gradient-to-r from-orange-500 to-red-500 text-white',
+    warm: 'bg-gradient-to-r from-amber-400 to-orange-400 text-white',
+    cold: 'bg-gray-400 text-white',
+  };
+  const sizes: Record<string, string> = {
+    xs: 'px-1.5 py-0.5 text-[10px]',
+    sm: 'px-2 py-0.5 text-xs',
+    md: 'px-2.5 py-1 text-sm',
+  };
+  return (
+    <span className={`inline-flex items-center font-medium rounded-full ${variants[variant] || variants.default} ${sizes[size] || sizes.sm}`}>
+      {children}
+    </span>
+  );
+};
+
+// Social Icon
+const SocialIcon = ({ platform, url }: { platform: string; url: string }) => {
+  const icons: Record<string, string> = {
+    linkedin: 'bg-[#0A66C2]',
+    facebook: 'bg-[#1877F2]',
+    twitter: 'bg-black',
+    instagram: 'bg-gradient-to-tr from-yellow-400 via-red-500 to-purple-600',
+    youtube: 'bg-[#FF0000]',
+    tiktok: 'bg-black',
+    pinterest: 'bg-[#E60023]',
+  };
+  const labels: Record<string, string> = {
+    linkedin: 'in',
+    facebook: 'f',
+    twitter: 'X',
+    instagram: 'ig',
+    youtube: 'yt',
+    tiktok: 'tk',
+    pinterest: 'p',
+  };
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`w-6 h-6 ${icons[platform] || 'bg-gray-500'} rounded flex items-center justify-center text-white text-[10px] font-bold hover:opacity-80 transition-opacity`}
+      title={platform}
+    >
+      {labels[platform] || '?'}
+    </a>
+  );
+};
+
+// Lead Score Display
+const LeadScore = ({ score }: { score: number }) => {
+  const getScoreConfig = (s: number) => {
+    if (s >= 80) return { variant: 'hot', label: 'Hot Lead', ring: 'ring-orange-400' };
+    if (s >= 60) return { variant: 'warm', label: 'Warm Lead', ring: 'ring-amber-400' };
+    return { variant: 'cold', label: 'Cold Lead', ring: 'ring-gray-300' };
+  };
+  const config = getScoreConfig(score);
+  return (
+    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full ring-2 ${config.ring} bg-white`}>
+      <div className="relative w-8 h-8">
+        <svg className="w-8 h-8 -rotate-90" viewBox="0 0 36 36">
+          <circle cx="18" cy="18" r="16" fill="none" stroke="#e5e7eb" strokeWidth="3" />
+          <circle
+            cx="18" cy="18" r="16" fill="none" strokeWidth="3"
+            stroke={score >= 80 ? '#f97316' : score >= 60 ? '#fbbf24' : '#9ca3af'}
+            strokeDasharray={`${score} 100`}
+            strokeLinecap="round"
+          />
+        </svg>
+        <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold">{score}</span>
+      </div>
+      <Badge variant={config.variant} size="xs">{config.label}</Badge>
+    </div>
+  );
+};
+
+// Quick Action Button
+const QuickAction = ({ icon, label, href, variant = 'default', onClick }: {
+  icon: string;
+  label: string;
+  href?: string;
+  variant?: string;
+  onClick?: () => void;
+}) => {
+  const variants: Record<string, string> = {
+    default: 'bg-gray-100 hover:bg-gray-200 text-gray-700',
+    primary: 'bg-blue-600 hover:bg-blue-700 text-white',
+    success: 'bg-emerald-600 hover:bg-emerald-700 text-white',
+    linkedin: 'bg-[#0A66C2] hover:bg-[#084e96] text-white',
+  };
+  const className = `inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${variants[variant] || variants.default}`;
+
+  if (href) {
+    return (
+      <a href={href} target={href.startsWith('http') ? '_blank' : undefined} rel="noopener noreferrer" className={className}>
+        <span>{icon}</span>
+        <span>{label}</span>
+      </a>
+    );
+  }
+  return (
+    <button onClick={onClick} className={className}>
+      <span>{icon}</span>
+      <span>{label}</span>
+    </button>
+  );
+};
+
+// Business Card Component
+const BusinessCard = ({
+  business,
+  isSelected,
+  isExpanded,
+  onToggleSelect,
+  onToggleExpand,
+  onEnrich,
+}: {
+  business: Business;
+  index: number;
+  isSelected: boolean;
+  isExpanded: boolean;
+  onToggleSelect: () => void;
+  onToggleExpand: () => void;
+  onEnrich: () => void;
+}) => {
+  const getStatusConfig = (status?: string) => {
+    switch (status?.toLowerCase()) {
+      case 'active': return { variant: 'success', label: 'Active' };
+      case 'dissolved': return { variant: 'danger', label: 'Dissolved' };
+      case 'dormant': return { variant: 'warning', label: 'Dormant' };
+      case 'liquidation': return { variant: 'danger', label: 'Liquidation' };
+      default: return null;
+    }
+  };
+
+  const statusConfig = getStatusConfig(business.companyStatus);
+  const hasSocialMedia = business.socialMedia && Object.values(business.socialMedia).some(Boolean);
+  const primaryEmail = business.emails?.[0]?.address || business.email;
+  const emailCount = business.emails?.length || (business.email ? 1 : 0);
+  const personalEmails = business.emails?.filter(e => e.type === 'personal') || [];
+  const verifiedEmails = business.emails?.filter(e => e.verified) || [];
+
+  return (
+    <div
+      className={`group relative bg-white rounded-xl border-2 transition-all duration-200 hover:shadow-lg cursor-pointer ${
+        business.lead_score >= 80
+          ? 'border-orange-300 bg-gradient-to-r from-orange-50 to-white'
+          : business.lead_score >= 60
+          ? 'border-amber-300 bg-gradient-to-r from-amber-50 to-white'
+          : 'border-gray-200'
+      } ${isExpanded ? 'ring-2 ring-blue-400 shadow-lg' : ''}`}
+      onClick={onToggleExpand}
+    >
+      {/* Priority Indicator */}
+      {business.lead_score >= 80 && (
+        <div className="absolute -top-2 -right-2 w-8 h-8 bg-orange-500 rounded-full flex items-center justify-center shadow-lg">
+          <span className="text-white text-sm">!</span>
+        </div>
+      )}
+
+      <div className="p-4">
+        {/* Header Row */}
+        <div className="flex items-start gap-3">
+          {/* Checkbox */}
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={(e) => { e.stopPropagation(); onToggleSelect(); }}
+            onClick={(e) => e.stopPropagation()}
+            className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+
+          {/* Main Content */}
+          <div className="flex-1 min-w-0">
+            {/* Company Name & Status */}
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 className="font-semibold text-lg text-gray-900 truncate">{business.name}</h3>
+                <div className="flex flex-wrap items-center gap-2 mt-1">
+                  {business.industry && <Badge variant="info">{business.industry}</Badge>}
+                  {business.distance && <Badge>{business.distance}</Badge>}
+                  {statusConfig && <Badge variant={statusConfig.variant}>{statusConfig.label}</Badge>}
+                  {business.enriched && <Badge variant="purple">Enriched</Badge>}
+                </div>
+              </div>
+
+              {/* Lead Score */}
+              <LeadScore score={business.lead_score || 50} />
+            </div>
+
+            {/* Company Details */}
+            {business.companyNumber && (
+              <p className="mt-2 text-xs text-gray-500">
+                Co. #{business.companyNumber}
+                {business.companyType && ` | ${business.companyType}`}
+                {business.incorporationDate && ` | Est. ${business.incorporationDate}`}
+              </p>
+            )}
+
+            {/* Quick Info Grid */}
+            <div className="mt-3 grid grid-cols-2 lg:grid-cols-4 gap-2 text-sm">
+              {business.phone && (
+                <a
+                  href={`tel:${business.phone}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center gap-1.5 text-gray-600 hover:text-blue-600"
+                >
+                  <span className="text-gray-400">T</span>
+                  <span className="truncate">{business.phone}</span>
+                </a>
+              )}
+              {primaryEmail && (
+                <a
+                  href={`mailto:${primaryEmail}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center gap-1.5 text-gray-600 hover:text-blue-600"
+                >
+                  <span className="text-gray-400">@</span>
+                  <span className="truncate">{primaryEmail}</span>
+                  {emailCount > 1 && <Badge size="xs">+{emailCount - 1}</Badge>}
+                </a>
+              )}
+              {business.website && (
+                <a
+                  href={business.website.startsWith('http') ? business.website : `https://${business.website}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex items-center gap-1.5 text-gray-600 hover:text-blue-600"
+                >
+                  <span className="text-gray-400">W</span>
+                  <span className="truncate">{business.website.replace(/^https?:\/\//, '')}</span>
+                </a>
+              )}
+              {business.rating && (
+                <div className="flex items-center gap-1.5 text-amber-600">
+                  <span>*</span>
+                  <span>{business.rating} ({business.review_count || 0})</span>
+                </div>
+              )}
+            </div>
+
+            {/* Social Media Icons */}
+            {hasSocialMedia && (
+              <div className="mt-3 flex gap-1" onClick={(e) => e.stopPropagation()}>
+                {business.socialMedia?.linkedin && <SocialIcon platform="linkedin" url={business.socialMedia.linkedin} />}
+                {business.socialMedia?.facebook && <SocialIcon platform="facebook" url={business.socialMedia.facebook} />}
+                {business.socialMedia?.twitter && <SocialIcon platform="twitter" url={business.socialMedia.twitter} />}
+                {business.socialMedia?.instagram && <SocialIcon platform="instagram" url={business.socialMedia.instagram} />}
+                {business.socialMedia?.youtube && <SocialIcon platform="youtube" url={business.socialMedia.youtube} />}
+                {business.socialMedia?.tiktok && <SocialIcon platform="tiktok" url={business.socialMedia.tiktok} />}
+                {business.socialMedia?.pinterest && <SocialIcon platform="pinterest" url={business.socialMedia.pinterest} />}
+              </div>
+            )}
+
+            {/* Lead Signals */}
+            {business.lead_signals && business.lead_signals.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1">
+                {business.lead_signals.slice(0, 3).map((signal, i) => (
+                  <span key={i} className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">
+                    {signal}
+                  </span>
+                ))}
+                {business.lead_signals.length > 3 && (
+                  <span className="text-xs text-gray-500">+{business.lead_signals.length - 3} more</span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Actions Column */}
+          <div className="flex flex-col items-end gap-2" onClick={(e) => e.stopPropagation()}>
+            <button
+              onClick={onEnrich}
+              disabled={business.enriched || business.enriching}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                business.enriched
+                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                  : business.enriching
+                  ? 'bg-violet-100 text-violet-700'
+                  : 'bg-violet-600 text-white hover:bg-violet-700'
+              }`}
+            >
+              {business.enriching ? 'Enriching...' : business.enriched ? 'Enriched' : 'Enrich'}
+            </button>
+            <span className="text-xs text-gray-400">{business.source}</span>
+            <span className="text-gray-400 text-sm">{isExpanded ? '^' : 'v'}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Expanded Details */}
+      {isExpanded && (
+        <div
+          className="border-t-2 border-blue-100 bg-gradient-to-b from-blue-50 to-white px-4 py-4"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Quick Actions */}
+          <div className="flex flex-wrap gap-2 mb-4">
+            {business.phone && (
+              <QuickAction icon="T" label="Call" href={`tel:${business.phone}`} variant="success" />
+            )}
+            {primaryEmail && (
+              <QuickAction icon="@" label="Email" href={`mailto:${primaryEmail}`} variant="primary" />
+            )}
+            {business.website && (
+              <QuickAction
+                icon="W"
+                label="Website"
+                href={business.website.startsWith('http') ? business.website : `https://${business.website}`}
+              />
+            )}
+            {business.socialMedia?.linkedin && (
+              <QuickAction icon="in" label="LinkedIn" href={business.socialMedia.linkedin} variant="linkedin" />
+            )}
+          </div>
+
+          {/* Details Grid */}
+          <div className="grid md:grid-cols-3 gap-4">
+            {/* Contact Info */}
+            <div className="bg-white rounded-lg p-3 border border-gray-100">
+              <h4 className="font-medium text-gray-900 text-sm mb-2">Contact Details</h4>
+              <div className="space-y-2 text-sm">
+                {business.phone && (
+                  <div>
+                    <span className="text-xs text-gray-400">Phone</span>
+                    <p className="text-gray-900">{business.phone}</p>
+                  </div>
+                )}
+                {business.address && (
+                  <div>
+                    <span className="text-xs text-gray-400">Address</span>
+                    <p className="text-gray-700">{business.address}</p>
+                    {business.postcode && <p className="text-gray-600 font-mono">{business.postcode}</p>}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Company Info */}
+            <div className="bg-white rounded-lg p-3 border border-gray-100">
+              <h4 className="font-medium text-gray-900 text-sm mb-2">Company Info</h4>
+              <div className="space-y-2 text-sm">
+                {business.companyNumber && (
+                  <div>
+                    <span className="text-xs text-gray-400">Company #</span>
+                    <p className="font-mono text-gray-900">{business.companyNumber}</p>
+                  </div>
+                )}
+                {business.companyType && (
+                  <div>
+                    <span className="text-xs text-gray-400">Type</span>
+                    <p className="text-gray-700">{business.companyType}</p>
+                  </div>
+                )}
+                {business.incorporationDate && (
+                  <div>
+                    <span className="text-xs text-gray-400">Founded</span>
+                    <p className="text-gray-700">{business.incorporationDate}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Opportunities */}
+            <div className="bg-white rounded-lg p-3 border border-gray-100">
+              <h4 className="font-medium text-gray-900 text-sm mb-2">Sales Opportunities</h4>
+              {business.lead_signals && business.lead_signals.length > 0 ? (
+                <ul className="space-y-1 text-sm">
+                  {business.lead_signals.map((signal, i) => (
+                    <li key={i} className="flex items-start gap-1.5 text-gray-700">
+                      <span className="text-orange-500 mt-0.5">*</span>
+                      {signal}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-gray-400">No specific opportunities identified</p>
+              )}
+            </div>
+          </div>
+
+          {/* Additional Details */}
+          <div className="grid md:grid-cols-2 gap-4 mt-4">
+            {/* Directors */}
+            {business.directors && business.directors.length > 0 && (
+              <div className="bg-white rounded-lg p-3 border border-gray-100">
+                <h4 className="font-medium text-gray-900 text-sm mb-2">
+                  Directors ({business.directors.length})
+                </h4>
+                <div className="space-y-1">
+                  {business.directors.slice(0, 5).map((director, i) => (
+                    <div key={i} className="flex justify-between text-sm">
+                      <span className="text-gray-900">{director.name}</span>
+                      <span className="text-xs text-gray-500">{director.role}</span>
+                    </div>
+                  ))}
+                  {business.directors.length > 5 && (
+                    <p className="text-xs text-gray-400">+{business.directors.length - 5} more</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* People */}
+            {business.people && business.people.length > 0 && (
+              <div className="bg-white rounded-lg p-3 border border-gray-100">
+                <h4 className="font-medium text-gray-900 text-sm mb-2">
+                  People ({business.people.length})
+                </h4>
+                <div className="space-y-1">
+                  {business.people.slice(0, 5).map((person, i) => (
+                    <div key={i} className="flex justify-between items-center text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="text-gray-900">{person.name}</span>
+                        {person.linkedin && (
+                          <a href={person.linkedin} target="_blank" rel="noopener noreferrer" className="text-[#0A66C2]">
+                            in
+                          </a>
+                        )}
+                      </div>
+                      <span className="text-xs text-gray-500">{person.role}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* All Emails */}
+            {business.emails && business.emails.length > 0 && (
+              <div className="bg-white rounded-lg p-3 border border-gray-100">
+                <h4 className="font-medium text-gray-900 text-sm mb-2">
+                  Emails ({business.emails.length})
+                  {personalEmails.length > 0 && <Badge variant="success" size="xs">{personalEmails.length} personal</Badge>}
+                  {verifiedEmails.length > 0 && <Badge variant="info" size="xs">{verifiedEmails.length} verified</Badge>}
+                </h4>
+                <div className="space-y-1">
+                  {business.emails.slice(0, 5).map((email, i) => (
+                    <div key={i} className="flex items-center justify-between text-sm">
+                      <a href={`mailto:${email.address}`} className="text-blue-600 hover:underline truncate">
+                        {email.address}
+                      </a>
+                      <div className="flex gap-1">
+                        <Badge variant={email.type === 'personal' ? 'success' : 'default'} size="xs">
+                          {email.type}
+                        </Badge>
+                        {email.confidence && (
+                          <Badge
+                            variant={email.confidence === 'high' ? 'success' : email.confidence === 'medium' ? 'warning' : 'default'}
+                            size="xs"
+                          >
+                            {email.confidence}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {business.emails.length > 5 && (
+                    <p className="text-xs text-gray-400">+{business.emails.length - 5} more</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* SIC Codes */}
+            {business.sicCodes && business.sicCodes.length > 0 && (
+              <div className="bg-white rounded-lg p-3 border border-gray-100">
+                <h4 className="font-medium text-gray-900 text-sm mb-2">Industry Codes</h4>
+                <div className="space-y-1">
+                  {business.sicCodes.map((sic, i) => (
+                    <div key={i} className="text-sm">
+                      <span className="font-mono text-gray-500 text-xs">{sic.code}</span>
+                      <span className="text-gray-700 ml-2">{sic.description}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Description */}
+          {business.description && (
+            <div className="mt-4 bg-white rounded-lg p-3 border border-gray-100">
+              <h4 className="font-medium text-gray-900 text-sm mb-1">About</h4>
+              <p className="text-sm text-gray-600">{business.description}</p>
+            </div>
+          )}
+
+          {/* Registered Address */}
+          {business.registeredAddress && business.registeredAddress !== business.address && (
+            <div className="mt-4 bg-white rounded-lg p-3 border border-gray-100">
+              <h4 className="font-medium text-gray-900 text-sm mb-1">Registered Office</h4>
+              <p className="text-sm text-gray-600">{business.registeredAddress}</p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
+
 export default function Home() {
+  // State
   const [searchParams, setSearchParams] = useState<SearchParams>({
     query: "",
     postcode: "",
@@ -280,8 +732,37 @@ export default function Home() {
   const [selectedBusinesses, setSelectedBusinesses] = useState<Set<number>>(new Set());
   const [bulkEnriching, setBulkEnriching] = useState(false);
   const [expandedBusiness, setExpandedBusiness] = useState<number | null>(null);
+  const [sortBy, setSortBy] = useState<'score' | 'name' | 'rating'>('score');
 
-  const handleSearch = async () => {
+  // Sorted Results
+  const sortedResults = useMemo(() => {
+    return [...results].sort((a, b) => {
+      switch (sortBy) {
+        case 'score':
+          return (b.lead_score || 0) - (a.lead_score || 0);
+        case 'name':
+          return a.name.localeCompare(b.name);
+        case 'rating':
+          return parseFloat(b.rating || '0') - parseFloat(a.rating || '0');
+        default:
+          return 0;
+      }
+    });
+  }, [results, sortBy]);
+
+  // Stats
+  const stats = useMemo(() => {
+    const total = results.length;
+    const hot = results.filter(b => b.lead_score >= 80).length;
+    const warm = results.filter(b => b.lead_score >= 60 && b.lead_score < 80).length;
+    const enriched = results.filter(b => b.enriched).length;
+    const withEmail = results.filter(b => b.email || (b.emails && b.emails.length > 0)).length;
+    const withPhone = results.filter(b => b.phone).length;
+    return { total, hot, warm, enriched, withEmail, withPhone };
+  }, [results]);
+
+  // Handlers
+  const handleSearch = useCallback(async () => {
     const query = customQuery || searchParams.query;
     if (!query) {
       setError("Please select or enter a business type");
@@ -324,13 +805,12 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [customQuery, searchParams]);
 
-  const enrichBusiness = async (index: number) => {
+  const enrichBusiness = useCallback(async (index: number) => {
     const business = results[index];
     if (business.enriched || business.enriching) return;
 
-    // Mark as enriching
     setResults(prev => prev.map((b, i) =>
       i === index ? { ...b, enriching: true } : b
     ));
@@ -345,12 +825,15 @@ export default function Home() {
           postcode: business.postcode,
           rating: business.rating,
           review_count: business.review_count,
+          phone: business.phone,
+          email: business.email,
+          address: business.address,
+          industry: business.industry,
+          distance: business.distance,
         }),
       });
 
-      if (!response.ok) {
-        throw new Error("Enrichment failed");
-      }
+      if (!response.ok) throw new Error("Enrichment failed");
 
       const data = await response.json();
 
@@ -359,18 +842,19 @@ export default function Home() {
           ...b,
           ...data.enrichedData,
           lead_score: data.newLeadScore || b.lead_score,
+          lead_signals: data.leadSignals || b.lead_signals,
           enriched: true,
           enriching: false,
         } : b
       ));
-    } catch (err) {
+    } catch {
       setResults(prev => prev.map((b, i) =>
         i === index ? { ...b, enriching: false } : b
       ));
     }
-  };
+  }, [results]);
 
-  const enrichSelected = async () => {
+  const enrichSelected = useCallback(async () => {
     if (selectedBusinesses.size === 0) return;
     setBulkEnriching(true);
 
@@ -388,17 +872,19 @@ export default function Home() {
             postcode: b.postcode,
             rating: b.rating,
             review_count: b.review_count,
+            phone: b.phone,
+            email: b.email,
+            address: b.address,
+            industry: b.industry,
+            distance: b.distance,
           })),
         }),
       });
 
-      if (!response.ok) {
-        throw new Error("Bulk enrichment failed");
-      }
+      if (!response.ok) throw new Error("Bulk enrichment failed");
 
       const data = await response.json();
 
-      // Update results with enriched data
       setResults(prev => {
         const updated = [...prev];
         for (const result of data.results) {
@@ -414,14 +900,14 @@ export default function Home() {
         }
         return updated;
       });
-    } catch (err) {
+    } catch {
       setError("Bulk enrichment failed");
     } finally {
       setBulkEnriching(false);
     }
-  };
+  }, [selectedBusinesses, results]);
 
-  const toggleSelect = (index: number) => {
+  const toggleSelect = useCallback((index: number) => {
     setSelectedBusinesses(prev => {
       const newSet = new Set(prev);
       if (newSet.has(index)) {
@@ -431,78 +917,55 @@ export default function Home() {
       }
       return newSet;
     });
-  };
+  }, []);
 
-  const selectAll = () => {
+  const selectAll = useCallback(() => {
     if (selectedBusinesses.size === results.length) {
       setSelectedBusinesses(new Set());
     } else {
       setSelectedBusinesses(new Set(results.map((_, i) => i)));
     }
-  };
+  }, [selectedBusinesses.size, results.length]);
 
-  const exportCSV = () => {
+  const exportCSV = useCallback(() => {
     if (results.length === 0) return;
 
     const headers = [
-      "Name",
-      "Lead Score",
-      "Lead Signals",
-      "Distance",
-      "Email",
-      "All Emails",
-      "Phone",
-      "Website",
-      "Address",
-      "Postcode",
-      "Industry",
-      "Rating",
-      "Reviews",
-      "Source",
-      "Company Number",
-      "Company Status",
-      "Company Type",
-      "Incorporation Date",
-      "Registered Address",
-      "Directors",
-      "SIC Codes",
-      "LinkedIn",
-      "Facebook",
-      "Twitter",
-      "Instagram",
+      "Name", "Lead Score", "Lead Signals", "Distance", "Email", "All Emails",
+      "Phone", "Website", "Address", "Postcode", "Industry", "Rating", "Reviews",
+      "Source", "Company Number", "Company Status", "Company Type", "Incorporation Date",
+      "Registered Address", "Directors", "SIC Codes", "LinkedIn", "Facebook", "Twitter", "Instagram",
     ];
 
     const csvContent = [
       headers.join(","),
-      ...results.map((b) =>
-        [
-          `"${(b.name || '').replace(/"/g, '""')}"`,
-          `"${b.lead_score || ''}"`,
-          `"${(b.lead_signals || []).join("; ")}"`,
-          `"${b.distance || ''}"`,
-          `"${b.email || ''}"`,
-          `"${(b.emails || []).map(e => `${e.address} (${e.type})`).join("; ")}"`,
-          `"${b.phone || ''}"`,
-          `"${b.website || ''}"`,
-          `"${(b.address || '').replace(/"/g, '""')}"`,
-          `"${b.postcode || ''}"`,
-          `"${b.industry || ''}"`,
-          `"${b.rating || ''}"`,
-          `"${b.review_count || ''}"`,
-          `"${b.source || ''}"`,
-          `"${b.companyNumber || ''}"`,
-          `"${b.companyStatus || ''}"`,
-          `"${b.companyType || ''}"`,
-          `"${b.incorporationDate || ''}"`,
-          `"${(b.registeredAddress || '').replace(/"/g, '""')}"`,
-          `"${(b.directors || []).map(d => `${d.name} (${d.role})`).join("; ")}"`,
-          `"${(b.sicCodes || []).map(s => `${s.code}: ${s.description}`).join("; ")}"`,
-          `"${b.socialMedia?.linkedin || ''}"`,
-          `"${b.socialMedia?.facebook || ''}"`,
-          `"${b.socialMedia?.twitter || ''}"`,
-          `"${b.socialMedia?.instagram || ''}"`,
-        ].join(",")
-      ),
+      ...results.map((b) => [
+        `"${(b.name || '').replace(/"/g, '""')}"`,
+        `"${b.lead_score || ''}"`,
+        `"${(b.lead_signals || []).join("; ")}"`,
+        `"${b.distance || ''}"`,
+        `"${b.email || ''}"`,
+        `"${(b.emails || []).map(e => `${e.address} (${e.type})`).join("; ")}"`,
+        `"${b.phone || ''}"`,
+        `"${b.website || ''}"`,
+        `"${(b.address || '').replace(/"/g, '""')}"`,
+        `"${b.postcode || ''}"`,
+        `"${b.industry || ''}"`,
+        `"${b.rating || ''}"`,
+        `"${b.review_count || ''}"`,
+        `"${b.source || ''}"`,
+        `"${b.companyNumber || ''}"`,
+        `"${b.companyStatus || ''}"`,
+        `"${b.companyType || ''}"`,
+        `"${b.incorporationDate || ''}"`,
+        `"${(b.registeredAddress || '').replace(/"/g, '""')}"`,
+        `"${(b.directors || []).map(d => `${d.name} (${d.role})`).join("; ")}"`,
+        `"${(b.sicCodes || []).map(s => `${s.code}: ${s.description}`).join("; ")}"`,
+        `"${b.socialMedia?.linkedin || ''}"`,
+        `"${b.socialMedia?.facebook || ''}"`,
+        `"${b.socialMedia?.twitter || ''}"`,
+        `"${b.socialMedia?.instagram || ''}"`,
+      ].join(","))
     ].join("\n");
 
     const blob = new Blob([csvContent], { type: "text/csv" });
@@ -511,700 +974,265 @@ export default function Home() {
     a.href = url;
     a.download = `uk-businesses-${searchParams.postcode}-${Date.now()}.csv`;
     a.click();
-  };
+    URL.revokeObjectURL(url);
+  }, [results, searchParams.postcode]);
 
-  const exportJSON = () => {
+  const exportJSON = useCallback(() => {
     if (results.length === 0) return;
 
-    const blob = new Blob([JSON.stringify(results, null, 2)], {
-      type: "application/json",
-    });
+    const blob = new Blob([JSON.stringify(results, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `uk-businesses-${searchParams.postcode}-${Date.now()}.json`;
     a.click();
-  };
+    URL.revokeObjectURL(url);
+  }, [results, searchParams.postcode]);
 
-  const getStatusColor = (status?: string) => {
-    switch (status) {
-      case 'active': return 'bg-green-100 text-green-800';
-      case 'dissolved': return 'bg-red-100 text-red-800';
-      case 'dormant': return 'bg-yellow-100 text-yellow-800';
-      case 'liquidation': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
-
+  // Render
   return (
-    <main className="max-w-7xl mx-auto px-4 py-8">
-      <div className="text-center mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">
-          UK Business Lead Scraper
-        </h1>
-        <p className="text-gray-600">
-          Search UK businesses with Companies House enrichment
-        </p>
-      </div>
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+      {/* Header */}
+      <header className="bg-white/80 backdrop-blur-sm border-b border-gray-200 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-violet-600 bg-clip-text text-transparent">
+                UK Business Lead Scraper
+              </h1>
+              <p className="text-sm text-gray-500">Advanced B2B Lead Generation & Enrichment</p>
+            </div>
+            {stats.total > 0 && (
+              <div className="hidden md:flex items-center gap-4 text-sm">
+                <div className="text-center">
+                  <p className="font-bold text-gray-900">{stats.total}</p>
+                  <p className="text-gray-500">Total</p>
+                </div>
+                <div className="text-center">
+                  <p className="font-bold text-orange-500">{stats.hot}</p>
+                  <p className="text-gray-500">Hot</p>
+                </div>
+                <div className="text-center">
+                  <p className="font-bold text-amber-500">{stats.warm}</p>
+                  <p className="text-gray-500">Warm</p>
+                </div>
+                <div className="text-center">
+                  <p className="font-bold text-violet-500">{stats.enriched}</p>
+                  <p className="text-gray-500">Enriched</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </header>
 
-      <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
-        <div className="grid md:grid-cols-2 gap-6">
-          {/* Business Type */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Business Type
-            </label>
-            <select
-              value={searchParams.query}
-              onChange={(e) => {
-                setSearchParams((prev) => ({ ...prev, query: e.target.value }));
-                setCustomQuery("");
-              }}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="">Select a business type...</option>
-              {Object.entries(BUSINESS_CATEGORIES).map(([category, types]) => (
-                <optgroup key={category} label={category}>
-                  {types.map((type: string) => (
-                    <option key={type} value={type.toLowerCase()}>
-                      {type}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-            <div className="mt-2">
+      <div className="max-w-7xl mx-auto px-4 py-6">
+        {/* Search Form */}
+        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6 mb-6">
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* Business Type */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Business Type</label>
+              <select
+                value={searchParams.query}
+                onChange={(e) => {
+                  setSearchParams(prev => ({ ...prev, query: e.target.value }));
+                  setCustomQuery("");
+                }}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50"
+              >
+                <option value="">Select a business type...</option>
+                {Object.entries(BUSINESS_CATEGORIES).map(([category, types]) => (
+                  <optgroup key={category} label={category}>
+                    {types.map((type) => (
+                      <option key={type} value={type.toLowerCase()}>{type}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
               <input
                 type="text"
                 placeholder="Or enter custom type..."
                 value={customQuery}
                 onChange={(e) => {
                   setCustomQuery(e.target.value);
-                  setSearchParams((prev) => ({ ...prev, query: "" }));
+                  setSearchParams(prev => ({ ...prev, query: "" }));
                 }}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="mt-2 w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50"
               />
             </div>
-          </div>
 
-          {/* Location */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Postcode / Location
-            </label>
-            <input
-              type="text"
-              placeholder="e.g. SW1A 1AA or London"
-              value={searchParams.postcode}
-              onChange={(e) =>
-                setSearchParams((prev) => ({
-                  ...prev,
-                  postcode: e.target.value.toUpperCase(),
-                }))
-              }
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            <div className="mt-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Search Radius
-              </label>
-              <select
-                value={searchParams.radius}
-                onChange={(e) =>
-                  setSearchParams((prev) => ({ ...prev, radius: e.target.value }))
-                }
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                {RADIUS_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+            {/* Location */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Location</label>
+              <input
+                type="text"
+                placeholder="e.g. SW1A 1AA or London"
+                value={searchParams.postcode}
+                onChange={(e) => setSearchParams(prev => ({ ...prev, postcode: e.target.value.toUpperCase() }))}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50"
+              />
+              <div className="mt-2">
+                <label className="block text-xs text-gray-500 mb-1">Search Radius</label>
+                <select
+                  value={searchParams.radius}
+                  onChange={(e) => setSearchParams(prev => ({ ...prev, radius: e.target.value }))}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50"
+                >
+                  {RADIUS_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Data Sources Info */}
-        <div className="mt-6 p-3 bg-blue-50 rounded-lg">
-          <p className="text-sm text-blue-800">
-            <strong>Searching {DATA_SOURCES.length} sources:</strong>{" "}
-            {DATA_SOURCES.map(s => s.name).join(", ")}
-          </p>
-        </div>
-
-        {/* Max Pages */}
-        <div className="mt-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Pages per Source: {searchParams.maxPages} (~{searchParams.maxPages * 20} results per source)
-          </label>
-          <input
-            type="range"
-            min="1"
-            max="15"
-            value={searchParams.maxPages}
-            onChange={(e) =>
-              setSearchParams((prev) => ({
-                ...prev,
-                maxPages: parseInt(e.target.value),
-              }))
-            }
-            className="w-full"
-          />
-          <div className="flex justify-between text-xs text-gray-500">
-            <span>1 (faster)</span>
-            <span>15 (maximum results)</span>
+          {/* Data Sources */}
+          <div className="mt-4 p-3 bg-gradient-to-r from-blue-50 to-violet-50 rounded-xl">
+            <p className="text-sm text-gray-700">
+              <span className="font-medium">Searching {DATA_SOURCES.length} sources:</span>{" "}
+              {DATA_SOURCES.map(s => s.name).join(", ")}
+            </p>
           </div>
-        </div>
 
-        {error && (
-          <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-            {error}
+          {/* Pages Slider */}
+          <div className="mt-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Pages per Source: {searchParams.maxPages} (~{searchParams.maxPages * 20} results per source)
+            </label>
+            <input
+              type="range"
+              min="1"
+              max="15"
+              value={searchParams.maxPages}
+              onChange={(e) => setSearchParams(prev => ({ ...prev, maxPages: parseInt(e.target.value) }))}
+              className="w-full accent-blue-600"
+            />
+            <div className="flex justify-between text-xs text-gray-400">
+              <span>1 (faster)</span>
+              <span>15 (maximum)</span>
+            </div>
           </div>
-        )}
 
-        <button
-          onClick={handleSearch}
-          disabled={loading}
-          className="mt-6 w-full py-3 px-6 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-        >
-          {loading ? (
-            <span className="flex items-center justify-center gap-2">
-              <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                  fill="none"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                />
-              </svg>
-              Searching... This may take a minute
-            </span>
-          ) : (
-            "Search Businesses"
+          {/* Error */}
+          {error && (
+            <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
+              {error}
+            </div>
           )}
-        </button>
-      </div>
 
-      {/* Results */}
-      {searchComplete && (
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
-            <h2 className="text-xl font-semibold">
-              Found {results.length} businesses
-            </h2>
-            {results.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={selectAll}
-                  className="px-3 py-1.5 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50"
-                >
-                  {selectedBusinesses.size === results.length ? "Deselect All" : "Select All"}
-                </button>
-                <button
-                  onClick={enrichSelected}
-                  disabled={selectedBusinesses.size === 0 || bulkEnriching}
-                  className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:bg-gray-400"
-                >
-                  {bulkEnriching ? "Enriching..." : `Enrich Selected (${selectedBusinesses.size})`}
-                </button>
-                <button
-                  onClick={exportCSV}
-                  className="px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700"
-                >
-                  Export CSV
-                </button>
-                <button
-                  onClick={exportJSON}
-                  className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700"
-                >
-                  Export JSON
-                </button>
+          {/* Search Button */}
+          <button
+            onClick={handleSearch}
+            disabled={loading}
+            className="mt-6 w-full py-3 px-6 bg-gradient-to-r from-blue-600 to-violet-600 text-white font-medium rounded-xl hover:from-blue-700 hover:to-violet-700 disabled:from-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+          >
+            {loading ? (
+              <>
+                <Spinner />
+                Searching... This may take a minute
+              </>
+            ) : (
+              "Search Businesses"
+            )}
+          </button>
+        </div>
+
+        {/* Results */}
+        {searchComplete && (
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 p-6">
+            {/* Results Header */}
+            <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">
+                  Found {results.length} businesses
+                </h2>
+                <p className="text-sm text-gray-500">
+                  {stats.hot} hot leads, {stats.warm} warm leads, {stats.withEmail} with email
+                </p>
+              </div>
+
+              {results.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* Sort */}
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                    className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-gray-50"
+                  >
+                    <option value="score">Sort by Score</option>
+                    <option value="name">Sort by Name</option>
+                    <option value="rating">Sort by Rating</option>
+                  </select>
+
+                  <button
+                    onClick={selectAll}
+                    className="px-3 py-1.5 border border-gray-300 text-gray-700 text-sm rounded-lg hover:bg-gray-50"
+                  >
+                    {selectedBusinesses.size === results.length ? "Deselect All" : "Select All"}
+                  </button>
+                  <button
+                    onClick={enrichSelected}
+                    disabled={selectedBusinesses.size === 0 || bulkEnriching}
+                    className="px-3 py-1.5 bg-violet-600 text-white text-sm rounded-lg hover:bg-violet-700 disabled:bg-gray-400 flex items-center gap-1"
+                  >
+                    {bulkEnriching && <Spinner />}
+                    {bulkEnriching ? "Enriching..." : `Enrich (${selectedBusinesses.size})`}
+                  </button>
+                  <button
+                    onClick={exportCSV}
+                    className="px-3 py-1.5 bg-emerald-600 text-white text-sm rounded-lg hover:bg-emerald-700"
+                  >
+                    CSV
+                  </button>
+                  <button
+                    onClick={exportJSON}
+                    className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
+                  >
+                    JSON
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Results List */}
+            {results.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-gray-500">No businesses found. Try different search criteria.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {sortedResults.map((business, index) => (
+                  <BusinessCard
+                    key={index}
+                    business={business}
+                    index={index}
+                    isSelected={selectedBusinesses.has(index)}
+                    isExpanded={expandedBusiness === index}
+                    onToggleSelect={() => toggleSelect(index)}
+                    onToggleExpand={() => setExpandedBusiness(expandedBusiness === index ? null : index)}
+                    onEnrich={() => enrichBusiness(index)}
+                  />
+                ))}
               </div>
             )}
           </div>
+        )}
 
-          {results.length === 0 ? (
-            <p className="text-gray-500 text-center py-8">
-              No businesses found. Try different search criteria.
-            </p>
-          ) : (
-            <div className="space-y-4">
-              {results.map((business, index) => (
-                <div
-                  key={index}
-                  className={`border-2 rounded-lg overflow-hidden hover:shadow-lg transition-all cursor-pointer ${
-                    business.lead_score >= 80
-                      ? "border-green-500 bg-green-50"
-                      : business.lead_score >= 60
-                      ? "border-yellow-500 bg-yellow-50"
-                      : "border-gray-200 bg-white"
-                  } ${expandedBusiness === index ? "ring-2 ring-blue-400" : ""}`}
-                  onClick={() => setExpandedBusiness(expandedBusiness === index ? null : index)}
-                >
-                  <div className="p-4">
-                    <div className="flex justify-between items-start gap-4">
-                      <div className="flex items-start gap-3">
-                        <input
-                          type="checkbox"
-                          checked={selectedBusinesses.has(index)}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            toggleSelect(index);
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          className="mt-1.5 h-4 w-4 rounded border-gray-300"
-                        />
-                        <div className="flex-1">
-                          <div className="flex items-center gap-3 flex-wrap">
-                            <h3 className="font-semibold text-lg text-gray-900">
-                              {business.name}
-                            </h3>
-                            <span
-                              className={`px-2 py-1 rounded-full text-xs font-bold ${
-                                business.lead_score >= 80
-                                  ? "bg-green-600 text-white"
-                                  : business.lead_score >= 60
-                                  ? "bg-yellow-500 text-white"
-                                  : "bg-gray-400 text-white"
-                              }`}
-                            >
-                              {business.lead_score}% Match
-                            </span>
-                            {business.distance && (
-                              <span className="px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-700">
-                                ~{business.distance} away
-                              </span>
-                            )}
-                            {business.companyStatus && (
-                              <span className={`px-2 py-1 rounded-full text-xs ${getStatusColor(business.companyStatus)}`}>
-                                {business.companyStatus}
-                              </span>
-                            )}
-                            {business.enriched && (
-                              <span className="px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-700">
-                                Enriched
-                              </span>
-                            )}
-                          </div>
-                          {business.industry && (
-                            <p className="text-sm text-blue-600">{business.industry}</p>
-                          )}
-                          {business.companyNumber && (
-                            <p className="text-xs text-gray-500">
-                              Co. #{business.companyNumber} | {business.companyType}
-                              {business.incorporationDate && ` | Inc. ${business.incorporationDate}`}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => enrichBusiness(index)}
-                          disabled={business.enriched || business.enriching}
-                          className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-                            business.enriched
-                              ? "bg-gray-200 text-gray-500 cursor-not-allowed"
-                              : business.enriching
-                              ? "bg-indigo-200 text-indigo-700"
-                              : "bg-indigo-600 text-white hover:bg-indigo-700"
-                          }`}
-                        >
-                          {business.enriching ? "Enriching..." : business.enriched ? "Enriched" : "Enrich"}
-                        </button>
-                        <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
-                          {business.source}
-                        </span>
-                        <span className="text-xs text-gray-400">
-                          {expandedBusiness === index ? "▲" : "▼"}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Lead Signals */}
-                  {business.lead_signals && business.lead_signals.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-1">
-                      {business.lead_signals.map((signal, i) => (
-                        <span
-                          key={i}
-                          className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded"
-                        >
-                          {signal}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Basic Info */}
-                  <div className="mt-3 grid md:grid-cols-2 gap-2 text-sm text-gray-600">
-                    {business.address && (
-                      <p className="flex items-start gap-2">
-                        <span className="text-gray-400 shrink-0">Address:</span>
-                        <span>{business.address}{business.postcode && ` (${business.postcode})`}</span>
-                      </p>
-                    )}
-                    {business.phone && (
-                      <p className="flex items-center gap-2">
-                        <span className="text-gray-400">Phone:</span>
-                        <a href={`tel:${business.phone}`} className="text-blue-600 hover:underline">
-                          {business.phone}
-                        </a>
-                      </p>
-                    )}
-                    {(business.email || (business.emails && business.emails.length > 0)) && (
-                      <p className="flex items-center gap-2">
-                        <span className="text-gray-400">Email:</span>
-                        <a
-                          href={`mailto:${business.emails?.[0]?.address || business.email}`}
-                          className="text-blue-600 hover:underline"
-                        >
-                          {business.emails?.[0]?.address || business.email}
-                        </a>
-                        {business.emails && business.emails.length > 1 && (
-                          <span className="text-xs text-gray-500">+{business.emails.length - 1} more</span>
-                        )}
-                      </p>
-                    )}
-                    {business.website && (
-                      <p className="flex items-center gap-2">
-                        <span className="text-gray-400">Website:</span>
-                        <a
-                          href={business.website.startsWith('http') ? business.website : `https://${business.website}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:underline truncate max-w-xs"
-                        >
-                          {business.website.replace(/^https?:\/\//, '')}
-                        </a>
-                      </p>
-                    )}
-                    {business.rating && (
-                      <p className="flex items-center gap-2">
-                        <span className="text-gray-400">Rating:</span>
-                        <span className="text-yellow-600">
-                          {business.rating}
-                          {business.review_count && ` (${business.review_count} reviews)`}
-                        </span>
-                      </p>
-                    )}
-                    {/* Social Media */}
-                    {business.socialMedia && (
-                      <p className="flex items-center gap-2">
-                        <span className="text-gray-400">Social:</span>
-                        <span className="flex gap-2">
-                          {business.socialMedia.linkedin && (
-                            <a href={business.socialMedia.linkedin} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                              LinkedIn
-                            </a>
-                          )}
-                          {business.socialMedia.facebook && (
-                            <a href={business.socialMedia.facebook} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                              Facebook
-                            </a>
-                          )}
-                          {business.socialMedia.twitter && (
-                            <a href={business.socialMedia.twitter} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                              Twitter
-                            </a>
-                          )}
-                          {business.socialMedia.instagram && (
-                            <a href={business.socialMedia.instagram} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                              Instagram
-                            </a>
-                          )}
-                        </span>
-                      </p>
-                    )}
-                  </div>
-
-                  {business.description && (
-                    <p className="mt-2 text-sm text-gray-500 line-clamp-2">
-                      {business.description}
-                    </p>
-                  )}
-
-                  {/* Expanded Details - Sales-Focused Info Panel */}
-                  {expandedBusiness === index && (
-                    <div className="mt-4 pt-4 border-t-2 border-blue-200 bg-blue-50/30 -mx-4 px-4 pb-4" onClick={(e) => e.stopPropagation()}>
-                      {/* Quick Actions Bar */}
-                      <div className="flex flex-wrap gap-2 mb-4 pb-3 border-b border-gray-200">
-                        <h4 className="text-sm font-semibold text-gray-700 w-full mb-1">Quick Actions:</h4>
-                        {business.phone && (
-                          <a
-                            href={`tel:${business.phone}`}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700"
-                          >
-                            📞 Call Now
-                          </a>
-                        )}
-                        {(business.email || business.emails?.[0]?.address) && (
-                          <a
-                            href={`mailto:${business.emails?.[0]?.address || business.email}`}
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700"
-                          >
-                            ✉️ Send Email
-                          </a>
-                        )}
-                        {business.website && (
-                          <a
-                            href={business.website.startsWith('http') ? business.website : `https://${business.website}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700"
-                          >
-                            🌐 Visit Website
-                          </a>
-                        )}
-                        {business.socialMedia?.linkedin && (
-                          <a
-                            href={business.socialMedia.linkedin}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-700 text-white text-sm rounded-lg hover:bg-blue-800"
-                          >
-                            💼 LinkedIn
-                          </a>
-                        )}
-                      </div>
-
-                      <div className="grid md:grid-cols-3 gap-4">
-                        {/* Contact Info Column */}
-                        <div className="bg-white p-3 rounded-lg border border-gray-200">
-                          <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">📇 Contact Details</h4>
-                          <div className="space-y-2 text-sm">
-                            {business.phone && (
-                              <div>
-                                <span className="text-gray-500 text-xs">Phone:</span>
-                                <p className="font-medium text-gray-900">{business.phone}</p>
-                              </div>
-                            )}
-                            {(business.email || business.emails?.[0]?.address) && (
-                              <div>
-                                <span className="text-gray-500 text-xs">Primary Email:</span>
-                                <p className="font-medium text-blue-600 break-all">{business.emails?.[0]?.address || business.email}</p>
-                              </div>
-                            )}
-                            {business.address && (
-                              <div>
-                                <span className="text-gray-500 text-xs">Address:</span>
-                                <p className="text-gray-700">{business.address}</p>
-                                {business.postcode && <p className="font-mono text-gray-600">{business.postcode}</p>}
-                              </div>
-                            )}
-                            {business.website && (
-                              <div>
-                                <span className="text-gray-500 text-xs">Website:</span>
-                                <p className="text-blue-600 truncate">{business.website.replace(/^https?:\/\//, '')}</p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Company Info Column */}
-                        <div className="bg-white p-3 rounded-lg border border-gray-200">
-                          <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">🏢 Company Info</h4>
-                          <div className="space-y-2 text-sm">
-                            {business.companyNumber && (
-                              <div>
-                                <span className="text-gray-500 text-xs">Company #:</span>
-                                <p className="font-mono text-gray-900">{business.companyNumber}</p>
-                              </div>
-                            )}
-                            {business.companyType && (
-                              <div>
-                                <span className="text-gray-500 text-xs">Type:</span>
-                                <p className="text-gray-700">{business.companyType}</p>
-                              </div>
-                            )}
-                            {business.companyStatus && (
-                              <div>
-                                <span className="text-gray-500 text-xs">Status:</span>
-                                <p className={`font-medium ${business.companyStatus === 'active' ? 'text-green-600' : 'text-red-600'}`}>
-                                  {business.companyStatus.toUpperCase()}
-                                </p>
-                              </div>
-                            )}
-                            {business.incorporationDate && (
-                              <div>
-                                <span className="text-gray-500 text-xs">Founded:</span>
-                                <p className="text-gray-700">{business.incorporationDate}</p>
-                              </div>
-                            )}
-                            {business.rating && (
-                              <div>
-                                <span className="text-gray-500 text-xs">Rating:</span>
-                                <p className="text-yellow-600 font-medium">
-                                  ⭐ {business.rating} {business.review_count && `(${business.review_count} reviews)`}
-                                </p>
-                              </div>
-                            )}
-                            {business.industry && (
-                              <div>
-                                <span className="text-gray-500 text-xs">Industry:</span>
-                                <p className="text-gray-700">{business.industry}</p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Sales Opportunity Column */}
-                        <div className="bg-white p-3 rounded-lg border border-gray-200">
-                          <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">🎯 Sales Opportunities</h4>
-                          <div className="space-y-2">
-                            {business.lead_signals && business.lead_signals.length > 0 ? (
-                              <div className="space-y-1">
-                                {business.lead_signals.map((signal, i) => (
-                                  <div key={i} className="flex items-start gap-2 text-xs">
-                                    <span className="text-orange-500">•</span>
-                                    <span className="text-gray-700">{signal}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="text-xs text-gray-500">No specific opportunities identified</p>
-                            )}
-                            {business.description && (
-                              <div className="mt-2 pt-2 border-t border-gray-100">
-                                <span className="text-gray-500 text-xs block mb-1">About:</span>
-                                <p className="text-xs text-gray-600">{business.description}</p>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Additional Details Row */}
-                      <div className="grid md:grid-cols-2 gap-4 mt-4">
-                        {/* Directors */}
-                        {business.directors && business.directors.length > 0 && (
-                          <div className="bg-white p-3 rounded-lg border border-gray-200">
-                            <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">👥 Key People / Directors</h4>
-                            <div className="space-y-1">
-                              {business.directors.map((director, i) => (
-                                <div key={i} className="text-sm flex justify-between">
-                                  <span className="font-medium text-gray-900">{director.name}</span>
-                                  <span className="text-gray-500 text-xs">{director.role}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* All Emails Found */}
-                        {business.emails && business.emails.length > 0 && (
-                          <div className="bg-white p-3 rounded-lg border border-gray-200">
-                            <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">📧 All Emails Found ({business.emails.length})</h4>
-                            <div className="space-y-1">
-                              {business.emails.map((email, i) => (
-                                <div key={i} className="text-sm flex items-center justify-between gap-2">
-                                  <a href={`mailto:${email.address}`} className="text-blue-600 hover:underline truncate">
-                                    {email.address}
-                                  </a>
-                                  <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
-                                    email.type === 'personal' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'
-                                  }`}>
-                                    {email.type}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* SIC Codes */}
-                        {business.sicCodes && business.sicCodes.length > 0 && (
-                          <div className="bg-white p-3 rounded-lg border border-gray-200">
-                            <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">📊 Industry Codes (SIC)</h4>
-                            <div className="space-y-1">
-                              {business.sicCodes.map((sic, i) => (
-                                <div key={i} className="text-sm">
-                                  <span className="font-mono text-gray-500 text-xs">{sic.code}</span>
-                                  <span className="text-gray-700 ml-2">{sic.description}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Social Media */}
-                        {business.socialMedia && Object.values(business.socialMedia).some(Boolean) && (
-                          <div className="bg-white p-3 rounded-lg border border-gray-200">
-                            <h4 className="font-semibold text-gray-900 mb-2 text-sm border-b pb-1">📱 Social Media</h4>
-                            <div className="flex flex-wrap gap-2">
-                              {business.socialMedia.linkedin && (
-                                <a href={business.socialMedia.linkedin} target="_blank" rel="noopener noreferrer"
-                                   className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200">
-                                  LinkedIn
-                                </a>
-                              )}
-                              {business.socialMedia.facebook && (
-                                <a href={business.socialMedia.facebook} target="_blank" rel="noopener noreferrer"
-                                   className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs hover:bg-blue-200">
-                                  Facebook
-                                </a>
-                              )}
-                              {business.socialMedia.twitter && (
-                                <a href={business.socialMedia.twitter} target="_blank" rel="noopener noreferrer"
-                                   className="px-2 py-1 bg-sky-100 text-sky-700 rounded text-xs hover:bg-sky-200">
-                                  Twitter/X
-                                </a>
-                              )}
-                              {business.socialMedia.instagram && (
-                                <a href={business.socialMedia.instagram} target="_blank" rel="noopener noreferrer"
-                                   className="px-2 py-1 bg-pink-100 text-pink-700 rounded text-xs hover:bg-pink-200">
-                                  Instagram
-                                </a>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Registered Address if different */}
-                      {business.registeredAddress && business.registeredAddress !== business.address && (
-                        <div className="mt-4 bg-white p-3 rounded-lg border border-gray-200">
-                          <h4 className="font-semibold text-gray-900 mb-1 text-sm">🏛️ Registered Office Address</h4>
-                          <p className="text-sm text-gray-600">{business.registeredAddress}</p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
+        {/* API Notice */}
+        <div className="mt-6 p-4 bg-white/50 rounded-xl text-center">
+          <p className="text-sm text-gray-600">
+            Enrichment powered by Companies House, Google, Bing, LinkedIn & more.
+            <a
+              href="https://developer.company-information.service.gov.uk/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-600 hover:underline ml-1"
+            >
+              Get API Key
+            </a>
+          </p>
         </div>
-      )}
-
-      {/* API Key Notice */}
-      <div className="mt-8 p-4 bg-gray-100 rounded-lg">
-        <h3 className="font-medium text-gray-900 mb-2">Companies House Integration</h3>
-        <p className="text-sm text-gray-600">
-          To enable Companies House data enrichment (company registration, directors, SIC codes), add your API key to the environment variables:
-        </p>
-        <code className="mt-2 block text-xs bg-gray-200 p-2 rounded">
-          COMPANIES_HOUSE_API_KEY=your_api_key_here
-        </code>
-        <p className="text-sm text-gray-500 mt-2">
-          Get a free API key at{" "}
-          <a
-            href="https://developer.company-information.service.gov.uk/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-600 hover:underline"
-          >
-            developer.company-information.service.gov.uk
-          </a>
-        </p>
       </div>
     </main>
   );

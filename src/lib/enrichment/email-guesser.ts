@@ -5,24 +5,29 @@
 
 import { EmailGuessResult, EmailPatternConfig, MXVerificationResult } from './types';
 
-// Common UK business email patterns in priority order
+// Common UK business email patterns in priority order (comprehensive from prompt)
 const EMAIL_PATTERNS = [
-  // Most common UK business patterns
-  { pattern: '{first}.{last}', name: 'firstname.lastname' },
-  { pattern: '{first}', name: 'firstname' },
-  { pattern: '{first}{last}', name: 'firstnamelastname' },
-  { pattern: '{fi}.{last}', name: 'initial.lastname' },
-  { pattern: '{fi}{last}', name: 'initiallastname' },
-  { pattern: '{last}', name: 'lastname' },
-  { pattern: '{first}.{li}', name: 'firstname.initial' },
-  { pattern: '{first}_{last}', name: 'firstname_lastname' },
-  { pattern: '{first}-{last}', name: 'firstname-lastname' },
-  { pattern: '{last}.{first}', name: 'lastname.firstname' },
-  { pattern: '{last}{first}', name: 'lastnamefirstname' },
-  { pattern: '{fi}{li}', name: 'initials' },
+  // Most common UK business patterns (priority order)
+  { pattern: '{first}.{last}', name: 'firstname.lastname', priority: 1 },
+  { pattern: '{first}', name: 'firstname', priority: 2 },
+  { pattern: '{first}{last}', name: 'firstnamelastname', priority: 3 },
+  { pattern: '{fi}.{last}', name: 'initial.lastname', priority: 4 },
+  { pattern: '{fi}{last}', name: 'initiallastname', priority: 5 },
+  { pattern: '{last}', name: 'lastname', priority: 6 },
+  { pattern: '{first}.{li}', name: 'firstname.initial', priority: 7 },
+  { pattern: '{fi}{li}', name: 'initials', priority: 8 },
+  { pattern: '{first}_{last}', name: 'firstname_lastname', priority: 9 },
+  { pattern: '{first}-{last}', name: 'firstname-lastname', priority: 10 },
+  { pattern: '{last}.{first}', name: 'lastname.firstname', priority: 11 },
+  { pattern: '{last}{first}', name: 'lastnamefirstname', priority: 12 },
+  { pattern: '{last}.{fi}', name: 'lastname.initial', priority: 13 },
+  // With numbers (common for duplicate names)
+  { pattern: '{first}.{last}1', name: 'firstname.lastname1', priority: 14 },
+  { pattern: '{first}{last}1', name: 'firstnamelastname1', priority: 15 },
+  { pattern: '{fi}{last}1', name: 'initiallastname1', priority: 16 },
 ];
 
-// Generic email prefixes that are always worth trying
+// Generic email prefixes that are always worth trying (expanded)
 const GENERIC_PREFIXES = [
   'info',
   'contact',
@@ -37,19 +42,57 @@ const GENERIC_PREFIXES = [
   'general',
   'reception',
   'bookings',
+  'booking',
+  'appointments',
   'team',
   'support',
+  'quotes',
+  'jobs',
+  'careers',
+  'hr',
+  'accounts',
+  'billing',
+  'finance',
+  'press',
+  'media',
+  'marketing',
+  'customer',
+  'service',
+  'services',
 ];
 
 /**
  * Parse a full name into first and last name
+ * Handles multiple formats including Companies House (SURNAME, Firstname)
  */
 export function parseName(fullName: string): { firstName: string; lastName: string } {
+  if (!fullName) {
+    return { firstName: '', lastName: '' };
+  }
+
+  // Handle Companies House format: "SURNAME, Firstname Middlename"
+  if (fullName.includes(',')) {
+    const parts = fullName.split(',').map(p => p.trim());
+    if (parts.length >= 2) {
+      const lastName = parts[0];
+      const firstNames = parts[1].split(/\s+/);
+      return {
+        firstName: firstNames[0] || '',
+        lastName: lastName.charAt(0) + lastName.slice(1).toLowerCase(),
+      };
+    }
+  }
+
   const parts = fullName.trim().split(/\s+/);
 
   // Handle titles
-  const titles = ['mr', 'mrs', 'ms', 'miss', 'dr', 'prof', 'sir', 'lord', 'lady'];
-  const filtered = parts.filter(p => !titles.includes(p.toLowerCase().replace('.', '')));
+  const titles = ['mr', 'mrs', 'ms', 'miss', 'dr', 'prof', 'sir', 'lord', 'lady', 'professor'];
+  const suffixes = ['jr', 'sr', 'ii', 'iii', 'iv', 'phd', 'md', 'esq', 'obe', 'mbe', 'cbe'];
+
+  const filtered = parts.filter(p => {
+    const clean = p.toLowerCase().replace(/[.,]/g, '');
+    return !titles.includes(clean) && !suffixes.includes(clean);
+  });
 
   if (filtered.length === 0) {
     return { firstName: '', lastName: '' };
@@ -59,15 +102,29 @@ export function parseName(fullName: string): { firstName: string; lastName: stri
     return { firstName: filtered[0], lastName: '' };
   }
 
+  // Handle hyphenated last names
+  const lastName = filtered[filtered.length - 1];
+
   // First name is first word, last name is last word
   return {
     firstName: filtered[0],
-    lastName: filtered[filtered.length - 1],
+    lastName: lastName,
   };
 }
 
 /**
+ * Clean and normalize a name for email generation
+ */
+function cleanNamePart(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z-]/g, '') // Keep hyphens for hyphenated names
+    .replace(/-/g, ''); // Then remove hyphens for email
+}
+
+/**
  * Generate email variations for a person + domain
+ * Comprehensive pattern generation including hyphenated names
  */
 export function generateEmailPatterns(config: EmailPatternConfig): string[] {
   const { domain, firstName, lastName } = config;
@@ -76,10 +133,15 @@ export function generateEmailPatterns(config: EmailPatternConfig): string[] {
     return [];
   }
 
+  // Clean names, removing non-alpha characters
   const f = firstName.toLowerCase().replace(/[^a-z]/g, '');
   const l = lastName?.toLowerCase().replace(/[^a-z]/g, '') || '';
   const fi = f[0] || '';
   const li = l[0] || '';
+
+  // Also handle hyphenated names by keeping them cleaned
+  const fClean = firstName.toLowerCase().replace(/[-\s]/g, '');
+  const lClean = lastName?.toLowerCase().replace(/[-\s]/g, '') || '';
 
   const emails: string[] = [];
 
@@ -100,6 +162,13 @@ export function generateEmailPatterns(config: EmailPatternConfig): string[] {
       if (email && !email.includes('{')) {
         emails.push(`${email}@${domain}`);
       }
+    }
+
+    // Add hyphenated name variations if name differs when cleaned
+    if (fClean !== f || lClean !== l) {
+      emails.push(`${fClean}.${lClean}@${domain}`);
+      emails.push(`${fClean}@${domain}`);
+      emails.push(`${fClean[0]}.${lClean}@${domain}`);
     }
   }
 

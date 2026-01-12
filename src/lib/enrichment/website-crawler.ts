@@ -12,13 +12,16 @@ const HEADERS = {
   "Accept-Language": "en-GB,en;q=0.9",
 };
 
-// Expanded list of pages to crawl
+// Comprehensive list of pages to crawl (from prompt spec)
 const PAGES_TO_CRAWL = [
   // Standard pages
   '', // Homepage
   '/contact',
   '/contact-us',
   '/contactus',
+  '/get-in-touch',
+  '/reach-us',
+  '/enquiries',
   '/about',
   '/about-us',
   '/aboutus',
@@ -35,12 +38,14 @@ const PAGES_TO_CRAWL = [
   '/leadership',
   '/management',
   '/directors',
+  '/founders',
   '/who-we-are',
   '/about-us/team',
   '/about/team',
   '/about/our-team',
+  '/company/team',
 
-  // Legal pages (often have emails)
+  // Legal pages (often have emails for compliance)
   '/privacy',
   '/privacy-policy',
   '/terms',
@@ -48,30 +53,71 @@ const PAGES_TO_CRAWL = [
   '/legal',
   '/disclaimer',
   '/gdpr',
+  '/cookies',
+  '/cookie-policy',
+  '/data-protection',
+  '/compliance',
 
-  // Other common pages
-  '/careers',
-  '/jobs',
-  '/work-with-us',
+  // Support/Help
   '/support',
   '/help',
   '/faq',
+  '/customer-service',
+  '/customer-support',
+  '/helpdesk',
+
+  // Business pages
+  '/careers',
+  '/jobs',
+  '/work-with-us',
+  '/join-us',
   '/press',
   '/media',
   '/news',
+  '/blog',
+  '/partners',
+  '/affiliates',
+  '/investors',
 
-  // Service pages might have specific contacts
+  // Service pages
   '/services',
   '/what-we-do',
+  '/solutions',
+  '/pricing',
+  '/plans',
+  '/packages',
+
+  // Footer/Sitemap
+  '/sitemap',
+  '/site-map',
 ];
 
-// Obfuscated email patterns
+// Obfuscated email patterns (comprehensive)
 const OBFUSCATED_PATTERNS = [
   /(\w+)\s*\[\s*at\s*\]\s*(\w+)\s*\[\s*dot\s*\]\s*(\w+)/gi,
   /(\w+)\s*\(\s*at\s*\)\s*(\w+)\s*\(\s*dot\s*\)\s*(\w+)/gi,
   /(\w+)\s*\{at\}\s*(\w+)\s*\{dot\}\s*(\w+)/gi,
   /(\w+)\s+at\s+(\w+)\s+dot\s+(\w+)/gi,
+  /(\w+)\s*@\s*(\w+)\s*\.\s*(\w+)/gi, // Spaced out email
 ];
+
+// Additional email extraction patterns
+const ADVANCED_EMAIL_PATTERNS = {
+  // Data attributes (common anti-scraping technique)
+  dataEmail: /data-email=["']([^"']+)["']/gi,
+  dataUser: /data-user=["']([^"']+)["'].*?data-domain=["']([^"']+)["']/gi,
+  dataCfemail: /data-cfemail=["']([^"']+)["']/gi, // Cloudflare obfuscation
+
+  // JavaScript variables
+  jsEmail: /(?:email|mail|contact)\s*[=:]\s*["']([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})["']/gi,
+  jsConcat: /["']([a-zA-Z0-9._%+-]+)["']\s*\+\s*["']@["']\s*\+\s*["']([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})["']/gi,
+
+  // Schema.org structured data
+  schemaEmail: /"email"\s*:\s*["']([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})["']/gi,
+
+  // Contact schema
+  contactPoint: /"contactType"\s*:\s*"[^"]+"\s*,\s*"email"\s*:\s*"([^"]+)"/gi,
+};
 
 // UK phone patterns
 const UK_PHONE_PATTERNS = [
@@ -88,28 +134,39 @@ const UK_PHONE_PATTERNS = [
   /\b(\+44[\s.-]?\(?0?\)?[\s.-]?[1-9]\d{2,3}[\s.-]?\d{3}[\s.-]?\d{3,4})\b/g,
 ];
 
-// Social media patterns
+// Social media patterns (comprehensive)
 const SOCIAL_PATTERNS = {
   linkedin: [
     /href="(https?:\/\/(?:www\.)?linkedin\.com\/company\/[^"?#]+)/gi,
     /href="(https?:\/\/(?:www\.)?linkedin\.com\/in\/[^"?#]+)/gi,
+    /(https?:\/\/(?:www\.)?linkedin\.com\/company\/[\w-]+)/gi,
+    /(https?:\/\/(?:www\.)?linkedin\.com\/in\/[\w-]+)/gi,
   ],
   facebook: [
-    /href="(https?:\/\/(?:www\.)?facebook\.com\/(?!sharer)[^"?#]+)/gi,
+    /href="(https?:\/\/(?:www\.)?facebook\.com\/(?!sharer|share|dialog)[^"?#]+)/gi,
     /href="(https?:\/\/(?:www\.)?fb\.com\/[^"?#]+)/gi,
+    /(https?:\/\/(?:www\.)?facebook\.com\/[\w.-]+)/gi,
   ],
   twitter: [
-    /href="(https?:\/\/(?:www\.)?twitter\.com\/(?!intent)[^"?#]+)/gi,
-    /href="(https?:\/\/(?:www\.)?x\.com\/(?!intent)[^"?#]+)/gi,
+    /href="(https?:\/\/(?:www\.)?twitter\.com\/(?!intent|share)[^"?#]+)/gi,
+    /href="(https?:\/\/(?:www\.)?x\.com\/(?!intent|share)[^"?#]+)/gi,
+    /(https?:\/\/(?:www\.)?twitter\.com\/[\w]+)/gi,
   ],
   instagram: [
     /href="(https?:\/\/(?:www\.)?instagram\.com\/[^"?#]+)/gi,
+    /(https?:\/\/(?:www\.)?instagram\.com\/[\w.-]+)/gi,
   ],
   youtube: [
     /href="(https?:\/\/(?:www\.)?youtube\.com\/(?:channel|c|user|@)[^"?#]+)/gi,
+    /(https?:\/\/(?:www\.)?youtube\.com\/(?:channel|c|user|@)[\w-]+)/gi,
   ],
   tiktok: [
     /href="(https?:\/\/(?:www\.)?tiktok\.com\/@[^"?#]+)/gi,
+    /(https?:\/\/(?:www\.)?tiktok\.com\/@[\w.-]+)/gi,
+  ],
+  pinterest: [
+    /href="(https?:\/\/(?:www\.)?pinterest\.(?:com|co\.uk)\/[^"?#]+)/gi,
+    /(https?:\/\/(?:www\.)?pinterest\.(?:com|co\.uk)\/[\w]+)/gi,
   ],
 };
 
@@ -145,7 +202,24 @@ function cleanText(text: string | null | undefined): string {
 }
 
 /**
- * Extract emails from HTML with deobfuscation
+ * Decode Cloudflare email protection
+ */
+function decodeCfEmail(encoded: string): string | null {
+  try {
+    const r = parseInt(encoded.substr(0, 2), 16);
+    let email = '';
+    for (let i = 2; i < encoded.length; i += 2) {
+      const c = parseInt(encoded.substr(i, 2), 16) ^ r;
+      email += String.fromCharCode(c);
+    }
+    return email;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract emails from HTML with comprehensive deobfuscation
  */
 function extractEmails(html: string, pageName: string): EmailInfo[] {
   const emails: EmailInfo[] = [];
@@ -156,49 +230,76 @@ function extractEmails(html: string, pageName: string): EmailInfo[] {
     /example\.com/i, /test\.com/i, /noreply/i, /no-reply/i,
     /wixpress/i, /sentry\.io/i, /cloudflare/i, /@w\.org/i,
     /@schema\.org/i, /@sentry/i, /\.png$/i, /\.jpg$/i, /\.gif$/i,
+    /placeholder/i, /yourname/i, /youremail/i, /user@/i,
   ];
 
-  // Standard email patterns
-  const patterns = [
-    /href="mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\?[^"]*)?"[^>]*>/gi,
-    /\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(?:co\.uk|com|org|net|uk|io|biz|info))\b/gi,
-  ];
+  type EmailSource = EmailInfo['source'];
 
-  for (const pattern of patterns) {
-    const matches = html.matchAll(pattern);
-    for (const match of Array.from(matches)) {
-      const email = (match[1] || match[0]).toLowerCase().trim();
-      if (!email.includes('@') || seen.has(email)) continue;
-      if (invalidPatterns.some(p => p.test(email))) continue;
+  const addEmail = (email: string, source: EmailSource, confidence: 'high' | 'medium' | 'low' = 'high') => {
+    email = email.toLowerCase().trim();
+    if (!email.includes('@') || seen.has(email)) return;
+    if (invalidPatterns.some(p => p.test(email))) return;
+    if (email.length < 6 || email.length > 100) return;
 
-      seen.add(email);
-      emails.push({
-        address: email,
-        type: categorizeEmail(email),
-        source: 'crawled',
-        verified: false,
-        confidence: 'high', // Found on site = high confidence
-      });
-    }
+    seen.add(email);
+    emails.push({
+      address: email,
+      type: categorizeEmail(email),
+      source,
+      verified: false,
+      confidence,
+    });
+  };
+
+  // 1. Mailto links (most reliable)
+  const mailtoPattern = /href="mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:\?[^"]*)?"[^>]*>/gi;
+  for (const match of Array.from(html.matchAll(mailtoPattern))) {
+    addEmail(match[1], 'mailto', 'high');
   }
 
-  // Try obfuscated patterns
+  // 2. Standard email patterns
+  const standardPattern = /\b([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(?:co\.uk|com|org|net|uk|io|biz|info|ac\.uk|gov\.uk))\b/gi;
+  for (const match of Array.from(html.matchAll(standardPattern))) {
+    addEmail(match[1], 'crawled', 'high');
+  }
+
+  // 3. Obfuscated patterns
   for (const pattern of OBFUSCATED_PATTERNS) {
     const matches = html.matchAll(pattern);
     for (const match of Array.from(matches)) {
       if (match[1] && match[2] && match[3]) {
-        const email = `${match[1]}@${match[2]}.${match[3]}`.toLowerCase();
-        if (!seen.has(email) && !invalidPatterns.some(p => p.test(email))) {
-          seen.add(email);
-          emails.push({
-            address: email,
-            type: categorizeEmail(email),
-            source: 'crawled',
-            verified: false,
-            confidence: 'high',
-          });
-        }
+        const email = `${match[1]}@${match[2]}.${match[3]}`;
+        addEmail(email, 'deobfuscated', 'high');
       }
+    }
+  }
+
+  // 4. Data attribute emails
+  for (const match of Array.from(html.matchAll(ADVANCED_EMAIL_PATTERNS.dataEmail))) {
+    addEmail(match[1], 'data-attr', 'high');
+  }
+
+  // 5. Cloudflare email protection
+  for (const match of Array.from(html.matchAll(ADVANCED_EMAIL_PATTERNS.dataCfemail))) {
+    const decoded = decodeCfEmail(match[1]);
+    if (decoded) addEmail(decoded, 'cloudflare-decoded', 'high');
+  }
+
+  // 6. Schema.org structured data
+  for (const match of Array.from(html.matchAll(ADVANCED_EMAIL_PATTERNS.schemaEmail))) {
+    addEmail(match[1], 'schema-org', 'high');
+  }
+
+  // 7. JavaScript variables
+  for (const match of Array.from(html.matchAll(ADVANCED_EMAIL_PATTERNS.jsEmail))) {
+    addEmail(match[1], 'javascript', 'medium');
+  }
+
+  // 8. JavaScript concatenation patterns
+  for (const match of Array.from(html.matchAll(ADVANCED_EMAIL_PATTERNS.jsConcat))) {
+    if (match[1] && match[2]) {
+      const email = `${match[1]}@${match[2]}`;
+      addEmail(email, 'js-concat', 'medium');
     }
   }
 
@@ -305,6 +406,8 @@ function extractSocialMedia(html: string): SocialMedia {
           social.youtube = match[1];
         } else if (platform === 'tiktok' && !social.tiktok) {
           social.tiktok = match[1];
+        } else if (platform === 'pinterest' && !social.pinterest) {
+          social.pinterest = match[1];
         }
         break;
       }
